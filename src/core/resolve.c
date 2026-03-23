@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -49,6 +51,7 @@
 #include "dprint.h"
 #include "mem/mem.h"
 #include "ip_addr.h"
+#include "ut.h"
 #include "error.h"
 #include "globals.h" /* tcp_disable, tls_disable a.s.o */
 #include "cfg_core.h"
@@ -718,8 +721,12 @@ int match_search_list(const struct __res_state *res, char *name)
 }
 #endif
 
+#ifndef SR_DNS_MAX_QNO
 #define SR_DNS_MAX_QNO 10
+#endif
+#ifndef SR_DNS_MAX_ANO
 #define SR_DNS_MAX_ANO 100
+#endif
 
 /** gets the DNS records for name:type
  * returns a dyn. alloc'ed struct rdata linked list with the parsed responses
@@ -1054,7 +1061,7 @@ again:
 		rd->name_len = name_len;
 		/* alloc sizeof struct + space for the null terminated name */
 		rd->rdata = (void *)pkg_malloc(
-				sizeof(struct cname_rdata) - 1 + head->name_len + 1);
+				sizeof(struct cname_rdata) - 1 + fullname_rd->name_len + 1);
 		if(unlikely(rd->rdata == 0)) {
 			PKG_MEM_ERROR;
 			goto error_rd;
@@ -1623,7 +1630,11 @@ struct hostent *no_naptr_srv_sip_resolvehost(
 			srv_name.s = tmp_srv;
 			srv_name.len = strlen(tmp_srv);
 #ifdef USE_DNS_CACHE
-			he = dns_srv_get_he(&srv_name, port, dns_flags);
+			if(dns_cache_init) {
+				he = dns_srv_get_he(&srv_name, port, dns_flags);
+			} else {
+				he = srv_sip_resolvehost(&srv_name, 0, port, proto, 1, 0);
+			}
 #else
 			he = srv_sip_resolvehost(&srv_name, 0, port, proto, 1, 0);
 #endif
@@ -1660,6 +1671,7 @@ struct hostent *naptr_sip_resolvehost(
 	struct rdata *naptr_head;
 	char n_proto;
 	str srv_name;
+	str *name_copy = 0;
 	naptr_bmp_t tried_bmp; /* tried bitmap */
 	char origproto = PROTO_NONE;
 
@@ -1704,7 +1716,15 @@ struct hostent *naptr_sip_resolvehost(
 	he = no_naptr_srv_sip_resolvehost(name, port, proto);
 	/* fallback all the way down to A/AAAA */
 	if(he == 0) {
-		he = dns_get_he(name, dns_flags);
+		if(dns_cache_init) {
+			he = dns_get_he(name, dns_flags);
+		} else {
+			/* We need a zero terminated char* */
+			name_copy = shm_malloc(name->len + 1);
+			shm_str_dup(name_copy, name);
+			he = resolvehost(name_copy->s);
+			shm_free(name_copy);
+		}
 	}
 end:
 	if(naptr_head)
@@ -1779,7 +1799,8 @@ int str2ipbuf(str *st, ip_addr_t *ipb)
 
 	/* just in case that e.g. the VIA parser get confused */
 	if(unlikely(!st->s || st->len <= 0)) {
-		LM_ERR("invalid name, no conversion to IP address possible\n");
+		LM_ERR("invalid name (%p,%d), no conversion to IP address possible\n",
+				st->s, st->len);
 		return -1;
 	}
 	s = (unsigned char *)st->s;
@@ -1833,6 +1854,53 @@ ip_addr_t *str2ip(str *st)
 	return ipb;
 }
 
+/*
+* Resolve a host name to a hostent.
+* @param[in] name: the host name to resolve
+* @return the hostent structure or NULL on error
+*
+* @note
+* This function is a wrapper to choose between the DNS cache and the
+* system resolver. If the DNS cache is enabled, it will use the DNS cache
+* to resolve the host name. Otherwise, it will use the system resolver.
+*/
+struct hostent *__resolvehost(char *name)
+{
+#ifdef USE_DNS_CACHE
+	if(dns_cache_init) {
+		return dns_resolvehost(name);
+	} else {
+#endif
+		return _resolvehost(name);
+#ifdef USE_DNS_CACHE
+	}
+#endif
+}
+
+/*
+* Resolve a host name to a hostent.
+* @param[in] name: the host name to resolve
+* @param[in] port: the port number
+* @param[in] proto: the protocol
+* @return the hostent structure or NULL on error
+*
+* @note
+* This function is a wrapper to choose between the DNS cache and the
+* system resolver. If the DNS cache is enabled, it will use the DNS cache
+* to resolve the host name. Otherwise, it will use the system resolver.
+*/
+struct hostent *__sip_resolvehost(str *name, unsigned short *port, char *proto)
+{
+#ifdef USE_DNS_CACHE
+	if(dns_cache_init) {
+		return dns_sip_resolvehost(name, port, proto);
+	} else {
+#endif
+		return _sip_resolvehost(name, port, proto);
+#ifdef USE_DNS_CACHE
+	}
+#endif
+}
 /* converts a str to an ipv6 address struct stored in ipb
  * - ipb must be already allocated
  * - return 0 on success; <0 on failure */
@@ -1850,7 +1918,8 @@ int str2ip6buf(str *st, ip_addr_t *ipb)
 
 	/* just in case that e.g. the VIA parser get confused */
 	if(unlikely(!st->s || st->len <= 0)) {
-		LM_ERR("invalid name, no conversion to IP address possible\n");
+		LM_ERR("invalid name (%p,%d), no conversion to IP address possible\n",
+				st->s, st->len);
 		return -1;
 	}
 	/* init */

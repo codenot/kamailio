@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -505,6 +507,27 @@ int pv_get_to_attr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 		return pv_get_null(msg, param, res);
 	}
 	return pv_get_xto_attr(msg, param, res, get_to(msg), 0);
+}
+
+int pv_get_totagstate(sip_msg_t *msg, pv_param_t *param, pv_value_t *res)
+{
+	if(msg == NULL)
+		return pv_get_uintval(msg, param, res, 0);
+
+	if(msg->to == NULL && parse_headers(msg, HDR_TO_F, 0) == -1) {
+		LM_ERR("cannot parse To header\n");
+		return pv_get_uintval(msg, param, res, 0);
+	}
+	if(msg->to == NULL || get_to(msg) == NULL) {
+		LM_DBG("no To header\n");
+		return pv_get_uintval(msg, param, res, 0);
+	}
+
+	if(get_to(msg)->tag_value.s != NULL && get_to(msg)->tag_value.len > 0) {
+		return pv_get_uintval(msg, param, res, 1);
+	}
+
+	return pv_get_uintval(msg, param, res, 0);
 }
 
 int pv_get_from_attr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
@@ -1488,6 +1511,60 @@ int pv_get_body_size(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 }
 
 
+#define PV_ESCSTR_SIZE 32
+int pv_get_escstr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
+{
+	static char _pv_escstr[PV_ESCSTR_SIZE];
+	int i;
+	str s;
+
+	if(param->pvn.u.isname.name.n < 0) {
+		return pv_get_null(msg, param, res);
+	}
+
+	i = (2 * param->pvn.u.isname.name.n) % PV_ESCSTR_SIZE;
+	switch(param->pvn.u.isname.name.n) {
+		case 2:
+			_pv_escstr[i] = '\r';
+			break;
+		case 3:
+			_pv_escstr[i] = '\t';
+			break;
+		case 4:
+			_pv_escstr[i] = ' ';
+			break;
+		case 5:
+			_pv_escstr[i] = ',';
+			break;
+		case 6:
+			_pv_escstr[i] = '"';
+			break;
+		case 7:
+			_pv_escstr[i] = '\'';
+			break;
+		case 8:
+			_pv_escstr[i] = ':';
+			break;
+		case 9:
+			_pv_escstr[i] = ';';
+			break;
+		case 10:
+			_pv_escstr[i] = '\\';
+			break;
+		case 11:
+			_pv_escstr[i] = '`';
+			break;
+		default:
+			_pv_escstr[i] = '\n';
+			break;
+	}
+	_pv_escstr[i + 1] = '\0';
+	s.s = &_pv_escstr[i];
+	s.len = 1;
+	return pv_get_strval(msg, param, res, &s);
+}
+
+
 int pv_get_authattr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 {
 	struct hdr_field *hdr;
@@ -1762,11 +1839,11 @@ int pv_get_branches(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 
 int pv_get_avp(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 {
-	unsigned short name_type;
-	int_str avp_name;
-	int_str avp_value;
+	avp_flags_t name_type;
+	avp_name_t avp_name;
+	avp_value_t avp_value;
 	struct usr_avp *avp;
-	int_str avp_value0;
+	avp_value_t avp_value0;
 	struct usr_avp *avp0;
 	int idx;
 	int idxf;
@@ -2764,8 +2841,8 @@ int pv_get_server_id(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 
 int pv_get_cnt(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 {
-	int_str avp_name;
-	unsigned short avp_type = 0;
+	avp_name_t avp_name;
+	avp_flags_t avp_type = 0;
 	avp_search_state_t state;
 	pv_spec_t *pv = NULL;
 	unsigned int n = 0;
@@ -2995,10 +3072,10 @@ int pv_get_tcpconn_id(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 /********* start PV set functions *********/
 int pv_set_avp(struct sip_msg *msg, pv_param_t *param, int op, pv_value_t *val)
 {
-	int_str avp_name;
-	int_str avp_val;
+	avp_name_t avp_name;
+	avp_value_t avp_val;
 	int flags;
-	unsigned short name_type;
+	avp_flags_t name_type;
 	int idxf;
 	int idx;
 
@@ -3549,13 +3626,38 @@ int pv_set_bflag(
 	return 0;
 }
 
+static inline int is_uri_enclosed(struct sip_msg *msg, struct to_body *tb)
+{
+	/* Check for the presence of display name */
+	if(tb->display.len == 0) {
+		/* 	Display name not found */
+		char *uri_body = tb->body.s;
+
+		/* Assuming a valid sip message (true otherwise parser fails way before)
+		 if it starts with '<' there is a respective '>'.
+		 Also, parser trims any leading white space if no DisplayName is found
+		*/
+		if(uri_body[0] == '<') {
+			return 1;
+		}
+		return 0;
+	}
+	/* Display name found, URI should/must be enclosed */
+	return 1;
+}
+
 int pv_set_xto_attr(struct sip_msg *msg, pv_param_t *param, int op,
 		pv_value_t *val, struct to_body *tb, int type)
 {
 	str buf = {0, 0};
+	str buf_uri = {0, 0};
 	struct lump *l = NULL;
 	int loffset = 0;
+	int loffset_uri = 0;
 	int llen = 0;
+	int llen_uri = 0;
+	int is_enclosed = 0;
+	char *p;
 
 	if(msg == NULL || param == NULL) {
 		LM_ERR("bad parameters\n");
@@ -3573,13 +3675,28 @@ int pv_set_xto_attr(struct sip_msg *msg, pv_param_t *param, int op,
 				return -1;
 			}
 
-			buf.s = pkg_malloc(val->rs.len);
-			if(buf.s == 0) {
+			buf.len = val->rs.len;
+			if(!(tb->style & TBS_URI_ENCLOSED)) {
+				/* existing uri not enclosed - check if new one has parameters */
+				for(p = val->rs.s + val->rs.len - 1; p > val->rs.s; p--) {
+					if(*p == ';') {
+						buf.len += 2;
+						break;
+					}
+				}
+			}
+			buf.s = pkg_malloc(buf.len);
+			if(buf.s == NULL) {
 				LM_ERR("no more pkg mem\n");
 				goto error;
 			}
-			buf.len = val->rs.len;
-			memcpy(buf.s, val->rs.s, val->rs.len);
+			if(buf.len == val->rs.len + 2) {
+				buf.s[0] = '<';
+				memcpy(buf.s + 1, val->rs.s, val->rs.len);
+				buf.s[buf.len - 1] = '>';
+			} else {
+				memcpy(buf.s, val->rs.s, val->rs.len);
+			}
 			loffset = tb->uri.s - msg->buf;
 			llen = tb->uri.len;
 			break;
@@ -3601,7 +3718,7 @@ int pv_set_xto_attr(struct sip_msg *msg, pv_param_t *param, int op,
 				return -1;
 			}
 			buf.s = pkg_malloc(val->rs.len + 1);
-			if(buf.s == 0) {
+			if(buf.s == NULL) {
 				LM_ERR("no more pkg mem\n");
 				goto error;
 			}
@@ -3628,8 +3745,8 @@ int pv_set_xto_attr(struct sip_msg *msg, pv_param_t *param, int op,
 				return -1;
 			}
 			buf.s = pkg_malloc(val->rs.len);
-			if(buf.s == 0) {
-				LM_ERR("no more pkg mem\n");
+			if(buf.s == NULL) {
+				PKG_MEM_ERROR;
 				goto error;
 			}
 			buf.len = val->rs.len;
@@ -3655,12 +3772,35 @@ int pv_set_xto_attr(struct sip_msg *msg, pv_param_t *param, int op,
 				return -1;
 			}
 			buf.s = pkg_malloc(val->rs.len + 1);
-			if(buf.s == 0) {
+			if(buf.s == NULL) {
 				LM_ERR("no more pkg mem\n");
 				goto error;
 			}
 			buf.len = val->rs.len;
 			memcpy(buf.s, val->rs.s, val->rs.len);
+
+			/* Check if the URI is enclosed in angle brackets */
+			is_enclosed = is_uri_enclosed(msg, tb);
+			/* If uri is not enclosed, we need to enclose it in < >
+				before adding display name */
+			if(!is_enclosed) {
+				LM_DBG("URI is not enclosed in angle brackets\n");
+				/* Enclose URI in angle brackets */
+				loffset_uri = tb->uri.s - msg->buf;
+				llen_uri = tb->uri.len;
+				/* Add angle brackets */
+				buf_uri.s = pkg_malloc(tb->uri.len + 2);
+				if(buf_uri.s == 0) {
+					LM_ERR("no more pkg mem\n");
+					goto error;
+				}
+				buf_uri.len = tb->uri.len + 2;
+				buf_uri.s[0] = '<';
+				memcpy(buf_uri.s + 1, tb->uri.s, tb->uri.len);
+				buf_uri.s[buf_uri.len - 1] = '>';
+				LM_DBG("URI after enclosing: %.*s\n", buf_uri.len, buf_uri.s);
+			}
+
 			if(tb->display.len == 0) {
 				l = anchor_lump(msg, tb->body.s - msg->buf, 0, 0);
 				buf.s[buf.len] = ' ';
@@ -3687,14 +3827,39 @@ int pv_set_xto_attr(struct sip_msg *msg, pv_param_t *param, int op,
 			goto error;
 		}
 	} else {
-		if(buf.s != 0)
+		if(buf.s != NULL) {
 			pkg_free(buf.s);
+			buf.s = NULL;
+		}
 	}
+
+	if(llen_uri > 0) {
+		if((l = del_lump(msg, loffset_uri, llen_uri, 0)) == 0) {
+			LM_ERR("failed to delete xto attribute %d\n", type);
+			goto error;
+		}
+	}
+	/* set new value when given */
+	if(l != NULL && buf_uri.len > 0) {
+		if(insert_new_lump_after(l, buf_uri.s, buf_uri.len, 0) == 0) {
+			LM_ERR("failed to set xto attribute %d\n", type);
+			goto error;
+		}
+	} else {
+		if(buf_uri.s != 0) {
+			pkg_free(buf_uri.s);
+		}
+	}
+
 	return 0;
 
 error:
-	if(buf.s != 0)
+	if(buf_uri.s != 0) {
+		pkg_free(buf_uri.s);
+	}
+	if(buf.s != NULL) {
 		pkg_free(buf.s);
+	}
 	return -1;
 }
 

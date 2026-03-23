@@ -35,8 +35,10 @@
 #include "../../core/pt.h"
 #include "../../core/timer.h"
 #include "../../core/globals.h"
+#include "../../core/tcp_conn.h"
 #include "../../core/tcp_int_send.h"
 #include "../../core/tcp_read.h"
+#include "../../core/tcp_mtops.h"
 #include "../../core/cfg/cfg.h"
 #include "../../core/route.h"
 #include "../../core/forward.h"
@@ -56,6 +58,7 @@
 #include "tls_cfg.h"
 
 int tls_run_event_routes(struct tcp_connection *c);
+static void tls_free_ssl_cache(struct tls_extra_data *data);
 
 /* low memory threshold for openssl bug #1491 workaround */
 #define LOW_MEM_NEW_CONNECTION_TEST()          \
@@ -66,10 +69,6 @@ int tls_run_event_routes(struct tcp_connection *c);
 	(cfg_get(tls, tls_cfg, low_mem_threshold2) \
 			&& (shm_available_safe()           \
 					< cfg_get(tls, tls_cfg, low_mem_threshold2)))
-
-#define TLS_RD_MBUF_SZ 65536
-#define TLS_WR_MBUF_SZ 65536
-
 
 /* debugging */
 #ifdef NO_TLS_RD_DEBUG
@@ -132,6 +131,44 @@ extern str sr_tls_xavp_cfg;
 
 static str _ksr_tls_connect_server_id = STR_NULL;
 
+static void tls_store_outbound_xavp(struct tcp_connection *c)
+{
+	sr_xavp_t *vavp = NULL;
+	str sname = str_init("server_name");
+	str sid = str_init("server_id");
+
+	if(c == NULL || (c->flags & F_CONN_PASSIVE)) {
+		return;
+	}
+	if(sr_tls_xavp_cfg.s == NULL) {
+		return;
+	}
+
+	LM_DBG("storing outbound xavp (root=%.*s pid=%d proc=%d '%s' conn=%p)\n",
+			sr_tls_xavp_cfg.len, sr_tls_xavp_cfg.s, my_pid(), process_no,
+			my_desc(), c);
+
+	vavp = xavp_get_child_with_sval(&sr_tls_xavp_cfg, &sname);
+	if(vavp != NULL && vavp->val.v.s.len > 0) {
+		if(shm_str_update(&c->cinfo.server_name, &vavp->val.v.s) < 0) {
+			LM_WARN("failed to store outbound tls server_name in shm\n");
+		} else {
+			LM_DBG("stored outbound server_name: %.*s\n",
+					c->cinfo.server_name.len, c->cinfo.server_name.s);
+		}
+	}
+
+	vavp = xavp_get_child_with_sval(&sr_tls_xavp_cfg, &sid);
+	if(vavp != NULL && vavp->val.v.s.len > 0) {
+		if(shm_str_update(&c->cinfo.server_id, &vavp->val.v.s) < 0) {
+			LM_WARN("failed to store outbound tls server_id in shm\n");
+		} else {
+			LM_DBG("tls: stored outbound server_id: %.*s\n",
+					c->cinfo.server_id.len, c->cinfo.server_id.s);
+		}
+	}
+}
+
 int ksr_tls_set_connect_server_id(str *srvid)
 {
 	if(srvid == NULL || srvid->len <= 0) {
@@ -166,10 +203,17 @@ int ksr_tls_set_connect_server_id(str *srvid)
 	return 0;
 }
 
-static str *tls_get_connect_server_id(void)
+static str *tls_get_connect_server_id(struct tcp_connection *c)
 {
 	sr_xavp_t *vavp = NULL;
 	str sid = {"server_id", 9};
+
+	if(c != NULL && c->cinfo.server_id.s != NULL
+			&& c->cinfo.server_id.len > 0) {
+		LM_DBG("found outbound server id in tcp connection: %.*s\n",
+				c->cinfo.server_id.len, c->cinfo.server_id.s);
+		return &c->cinfo.server_id;
+	}
 
 	if(sr_tls_xavp_cfg.s != NULL) {
 		vavp = xavp_get_child_with_sval(&sr_tls_xavp_cfg, &sid);
@@ -192,11 +236,18 @@ static str *tls_get_connect_server_id(void)
 /**
  * get the server name (sni) for outbound connections from xavp
  */
-static str *tls_get_connect_server_name(void)
+static str *tls_get_connect_server_name(struct tcp_connection *c)
 {
 #ifndef OPENSSL_NO_TLSEXT
 	sr_xavp_t *vavp = NULL;
 	str sname = {"server_name", 11};
+
+	if(c != NULL && c->cinfo.server_name.s != NULL
+			&& c->cinfo.server_name.len > 0) {
+		LM_NOTICE("found outbound server name in tcp connection: %.*s\n",
+				c->cinfo.server_name.len, c->cinfo.server_name.s);
+		return &c->cinfo.server_name;
+	}
 
 	if(sr_tls_xavp_cfg.s != NULL)
 		vavp = xavp_get_child_with_sval(&sr_tls_xavp_cfg, &sname);
@@ -211,6 +262,7 @@ static str *tls_get_connect_server_name(void)
 #endif
 }
 
+
 /** finish the ssl init.
  * Creates the SSL context + internal tls_extra_data and sets
  * extra_data to it.
@@ -219,9 +271,14 @@ static str *tls_get_connect_server_name(void)
  * WARNING: the connection should be already locked.
  * @return 0 on success, -1 on error.
  */
+
+#define DOM_CTX(d) ((d)->ctx[ksr_tcp_main_threads == 0 ? process_no : 0])
+
 static int tls_complete_init(struct tcp_connection *c)
 {
 	tls_domain_t *dom;
+	char *dom_str;
+	size_t dom_str_size;
 	struct tls_extra_data *data = 0;
 	tls_domains_cfg_t *cfg;
 	enum tls_conn_states state;
@@ -257,8 +314,8 @@ static int tls_complete_init(struct tcp_connection *c)
 				cfg, TLS_DOMAIN_SRV, &c->rcv.dst_ip, c->rcv.dst_port, 0, 0);
 	} else {
 		state = S_TLS_CONNECTING;
-		sname = tls_get_connect_server_name();
-		srvid = tls_get_connect_server_id();
+		sname = tls_get_connect_server_name(c);
+		srvid = tls_get_connect_server_id(c);
 		dom = tls_lookup_cfg(cfg, TLS_DOMAIN_CLI, &c->rcv.dst_ip,
 				c->rcv.dst_port, sname, srvid);
 		ksr_tls_set_connect_server_id(NULL);
@@ -267,26 +324,36 @@ static int tls_complete_init(struct tcp_connection *c)
 		BUG("Invalid connection (state %d)\n", c->state);
 		goto error;
 	}
-	DBG("Using initial TLS domain %s (dom %p ctx %p sn [%s])\n",
-			tls_domain_str(dom), dom, dom->ctx[process_no],
-			ZSW(dom->server_name.s));
 
-	data = (struct tls_extra_data *)shm_malloc(sizeof(struct tls_extra_data));
+
+	DBG("Using initial TLS domain %s (dom %p ctx %p sn [%s])\n",
+			tls_domain_str(dom), dom, DOM_CTX(dom), ZSW(dom->server_name.s));
+
+	dom_str = tls_domain_str(dom);
+	dom_str_size = strlen(dom_str) + 1;
+
+	data = (struct tls_extra_data *)shm_malloc(
+			sizeof(struct tls_extra_data) + dom_str_size);
+
 	if(!data) {
 		ERR("Not enough shared memory left\n");
 		goto error;
 	}
 	memset(data, '\0', sizeof(struct tls_extra_data));
 	tls_openssl_clear_errors();
-	data->ssl = SSL_new(dom->ctx[process_no]);
+	data->ssl = SSL_new(DOM_CTX(dom));
 	data->rwbio = tls_BIO_new_mbuf(0, 0);
 	data->cfg = cfg;
 	data->state = state;
+	data->dom.s = (char *)data + sizeof(struct tls_extra_data);
+	data->dom.len = dom_str_size - 1;
+	memcpy(data->dom.s, dom_str, dom_str_size);
 
 	if(unlikely(data->ssl == 0 || data->rwbio == 0)) {
 		TLS_ERR_SSL("Failed to create SSL or BIO structure:", data->ssl);
 		if(data->ssl)
 			SSL_free(data->ssl);
+		tls_free_ssl_cache(data);
 		if(data->rwbio)
 			BIO_free(data->rwbio);
 		goto error;
@@ -297,6 +364,7 @@ static int tls_complete_init(struct tcp_connection *c)
 		if(!SSL_set_tlsext_host_name(data->ssl, sname->s)) {
 			if(data->ssl)
 				SSL_free(data->ssl);
+			tls_free_ssl_cache(data);
 			if(data->rwbio)
 				BIO_free(data->rwbio);
 			goto error;
@@ -314,11 +382,19 @@ static int tls_complete_init(struct tcp_connection *c)
 	}
 #endif
 #endif
+	/* link the extra data struct inside ssl connection*/
+	if(SSL_set_app_data(data->ssl, data) == 0) {
+		LM_ERR("failed to set app_data - possible memory issue\n");
+		if(data->ssl)
+			SSL_free(data->ssl);
+		tls_free_ssl_cache(data);
+		if(data->rwbio)
+			BIO_free(data->rwbio);
+		goto error;
+	}
+	/* SSL_set_bio does not allocate memory and has no return value */
 	SSL_set_bio(data->ssl, data->rwbio, data->rwbio);
 	c->extra_data = data;
-
-	/* link the extra data struct inside ssl connection*/
-	SSL_set_app_data(data->ssl, data);
 	return 0;
 
 error:
@@ -422,6 +498,105 @@ static void tls_dump_cert_info(char *s, X509 *cert)
 	}
 }
 
+
+/** Required for no shared memory OpenSSL(MT-mode): precompute and cache
+ * ssl metatdata in c->extra_data for the workers to access
+ * as PVs/selects
+ *
+ * Incurs a small overhead per connection but necessary as
+ * the *SSL pointer is only valid in PROC_TCP_MAIN
+ * 
+ */
+static void tls_free_ssl_cache(struct tls_extra_data *data)
+{
+	if(data->ssl_servername)
+		shm_free(data->ssl_servername);
+	if(data->ssl_cipher_name)
+		shm_free(data->ssl_cipher_name);
+	if(data->ssl_my_cert)
+		shm_free(data->ssl_my_cert);
+	if(data->ssl_peer_cert)
+		shm_free(data->ssl_peer_cert);
+	if(data->ssl_cert_chain)
+		shm_free(data->ssl_cert_chain);
+}
+
+
+static void tls_init_ssl_cache(struct tls_extra_data *tls_c)
+{
+	tls_c->ssl_servername = NULL;
+	tls_c->ssl_cipher_name = NULL;
+	tls_c->ssl_my_cert = NULL;
+	tls_c->ssl_peer_cert = NULL;
+	tls_c->ssl_cert_chain = NULL;
+	tls_c->ssl_verify_result = X509_V_ERR_UNSPECIFIED;
+	tls_c->ssl_cipher_bits = 0;
+	tls_c->ssl_version[0] = '\0';
+	tls_c->ssl_cipher_desc[0] = '\0';
+}
+
+static void tls_build_ssl_cache(struct tls_extra_data *tls_c, X509 *cert)
+{
+	SSL *ssl = tls_c->ssl;
+	const char *sni;
+	const SSL_CIPHER *cipher;
+	const char *cipher_name;
+	X509 *my_cert;
+	int alg_bits;
+	STACK_OF(X509) * chain;
+	X509 *peer_cert = NULL;
+
+	tls_c->ssl_verify_result = SSL_get_verify_result(ssl);
+
+	/* if no cert passed in, try to get it ourselves — owns the ref */
+	if(cert != NULL) {
+		/* caller passed it in — dup so we own it independently */
+		peer_cert = X509_dup(cert);
+	} else {
+		/* SSL_get_peer_certificate() increments ref — we own it */
+		peer_cert = SSL_get_peer_certificate(ssl);
+	}
+
+	if(peer_cert != NULL) {
+		tls_c->ssl_peer_cert =
+				cert_to_x509_DER(peer_cert, &tls_c->ssl_peer_cert_len);
+		X509_free(peer_cert); /* release our ref */
+	}
+
+	sni = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+	if(sni != NULL) {
+		tls_c->ssl_servername = shm_malloc(strlen(sni) + 1);
+		strcpy(tls_c->ssl_servername, sni);
+	}
+
+	strcpy(tls_c->ssl_cipher_desc, "unknown");
+	cipher = SSL_get_current_cipher(ssl);
+	if(cipher) {
+		SSL_CIPHER_description(
+				cipher, tls_c->ssl_cipher_desc, sizeof(tls_c->ssl_cipher_desc));
+		cipher_name = SSL_CIPHER_get_name(cipher);
+		if(cipher_name) {
+			tls_c->ssl_cipher_name = shm_malloc(strlen(cipher_name) + 1);
+			strcpy(tls_c->ssl_cipher_name, cipher_name);
+		}
+		tls_c->ssl_cipher_bits = SSL_CIPHER_get_bits(cipher, &alg_bits);
+	}
+
+	my_cert = SSL_get_certificate(ssl);
+	if(my_cert) {
+		tls_c->ssl_my_cert = cert_to_x509_DER(my_cert, &tls_c->ssl_my_cert_len);
+	}
+
+	strcpy(tls_c->ssl_version, SSL_get_version(ssl));
+
+	chain = SSL_get0_verified_chain(ssl);
+	if(chain) {
+		tls_c->ssl_cert_chain =
+				stack_to_x509_DER(chain, &tls_c->ssl_cert_chain_len);
+	}
+}
+
+
 /** wrapper around SSL_accept, usin SSL return convention.
  * It will also log critical errors and certificate debugging info.
  * @param c - tcp connection with tls (extra_data must be a filled
@@ -455,6 +630,7 @@ int tls_accept(struct tcp_connection *c, int *error)
 
 	tls_openssl_clear_errors();
 	ret = SSL_accept(ssl);
+	tls_init_ssl_cache(tls_c);
 	if(unlikely(ret == 1)) {
 		DBG("TLS accept successful\n");
 		tls_c->state = S_TLS_ESTABLISHED;
@@ -465,7 +641,9 @@ int tls_accept(struct tcp_connection *c, int *error)
 				SSL_get_cipher_bits(ssl, 0));
 		LOG(tls_log, "tls_accept: local socket: %s:%d\n",
 				ip_addr2a(&c->rcv.dst_ip), c->rcv.dst_port);
+
 		cert = SSL_get_peer_certificate(ssl);
+		tls_build_ssl_cache(tls_c, cert);
 		if(cert != 0) {
 			tls_dump_cert_info("tls_accept: client certificate", cert);
 			if(SSL_get_verify_result(ssl) != X509_V_OK) {
@@ -520,6 +698,8 @@ int tls_connect(struct tcp_connection *c, int *error)
 
 	tls_openssl_clear_errors();
 	ret = SSL_connect(ssl);
+	tls_init_ssl_cache(tls_c);
+
 	if(unlikely(ret == 1)) {
 		DBG("TLS connect successful\n");
 		tls_c->state = S_TLS_ESTABLISHED;
@@ -531,6 +711,7 @@ int tls_connect(struct tcp_connection *c, int *error)
 		LOG(tls_log, "tls_connect: sending socket: %s:%d \n",
 				ip_addr2a(&c->rcv.dst_ip), c->rcv.dst_port);
 		cert = SSL_get_peer_certificate(ssl);
+		tls_build_ssl_cache(tls_c, cert);
 		if(cert != 0) {
 			tls_dump_cert_info("tls_connect: server certificate", cert);
 			if(SSL_get_verify_result(ssl) != X509_V_OK) {
@@ -662,18 +843,18 @@ int tls_h_tcpconn_init_f(struct tcp_connection *c, int sock)
 	c->timeout = get_ticks_raw() + cfg_get(tls, tls_cfg, con_lifetime);
 	c->lifetime = cfg_get(tls, tls_cfg, con_lifetime);
 	c->extra_data = 0;
+	tls_store_outbound_xavp(c);
 	return 0;
 }
 
 
-/** clean the extra data upon connection shut down.
+/** clean the extra data upon connection shut down - direct version.
+ * Must only be called from tcp_main process (or supervisor/main in MP mode).
  */
-void tls_h_tcpconn_clean_f(struct tcp_connection *c)
+static void tls_h_tcpconn_clean_direct(struct tcp_connection *c)
 {
 	struct tls_extra_data *extra;
-	/*
-	* runs within global tcp lock
-	*/
+
 	if((c->type != PROTO_TLS) && (c->type != PROTO_WSS)) {
 		BUG("Bad connection structure\n");
 		abort();
@@ -682,6 +863,7 @@ void tls_h_tcpconn_clean_f(struct tcp_connection *c)
 	if(c->extra_data) {
 		extra = (struct tls_extra_data *)c->extra_data;
 		SSL_free(extra->ssl);
+		tls_free_ssl_cache(extra);
 		atomic_dec(&extra->cfg->ref_count);
 		if(extra->ct_wq)
 			tls_ct_wq_free(&extra->ct_wq);
@@ -692,6 +874,107 @@ void tls_h_tcpconn_clean_f(struct tcp_connection *c)
 		shm_free(c->extra_data);
 		c->extra_data = 0;
 	}
+	if(c->cinfo.server_name.s) {
+		shm_free(c->cinfo.server_name.s);
+		c->cinfo.server_name.s = NULL;
+		c->cinfo.server_name.len = 0;
+	}
+	if(c->cinfo.server_id.s) {
+		shm_free(c->cinfo.server_id.s);
+		c->cinfo.server_id.s = NULL;
+		c->cinfo.server_id.len = 0;
+	}
+}
+
+
+/**
+ * Parameters for MT dispatch of tls_h_tcpconn_clean_f.
+ */
+typedef struct tls_clean_params
+{
+	struct tcp_connection *c;
+	int pidx;
+} tls_clean_params_t;
+
+
+/**
+ * Thread callback: runs in tcp_main thread, safe to call SSL_free.
+ */
+static void tls_h_tcpconn_clean_mt_thread_cb(void *p, int pidx)
+{
+	tls_clean_params_t *cparams = NULL;
+	tcpx_task_result_t *rtask = NULL;
+
+	cparams = (tls_clean_params_t *)p;
+
+	rtask = (tcpx_task_result_t *)shm_mallocxz(sizeof(tcpx_task_result_t));
+	if(rtask == NULL) {
+		SHM_MEM_ERROR;
+		ksr_tcpx_thread_eresult(NULL, pidx);
+		return;
+	}
+	tls_h_tcpconn_clean_direct(cparams->c);
+	rtask->code = 0;
+	rtask->data = cparams;
+	ksr_tcpx_thread_eresult(rtask, pidx);
+	return;
+}
+
+
+/** clean the extra data upon connection shut down.
+ * In MT mode dispatches work to PROC_TCP_MAIN to ensure SSL_free is always
+ * called from the correct thread.  In MP mode runs directly (original path).
+ */
+void tls_h_tcpconn_clean_f(struct tcp_connection *c)
+{
+	/* At shutdown in MT mode, PROC_TCP_MAIN is already dead and the OS
+	 * reclaims all memory. Avoid touching its heap entirely. */
+	if(_ksr_is_main && ksr_tcp_main_threads != 0)
+		return;
+
+	if(ksr_tcp_main_threads != 0 && !is_tcp_main() && !_ksr_is_main) {
+		int dsize = 0;
+		tcpx_task_t *ptask = NULL;
+		tcpx_task_result_t *rtask = NULL;
+		tls_clean_params_t *cparams = NULL;
+
+		LM_DBG("dispatching tls clean to tcp main thread for conn %p\n", c);
+
+		dsize = sizeof(tcpx_task_t) + sizeof(tls_clean_params_t);
+		ptask = (tcpx_task_t *)shm_mallocxz(dsize);
+		if(ptask == NULL) {
+			SHM_MEM_ERROR;
+			LM_ERR("falling back to direct tls clean for conn %p\n", c);
+			goto direct_clean;
+		}
+		ptask->exec = tls_h_tcpconn_clean_mt_thread_cb;
+		ptask->param = (void *)((char *)ptask + sizeof(tcpx_task_t));
+		cparams = (tls_clean_params_t *)((char *)ptask + sizeof(tcpx_task_t));
+		cparams->c = c;
+		cparams->pidx = process_no;
+
+		if(ksr_tcpx_task_send(ptask, process_no) < 0) {
+			LM_ERR("failed to send tls clean task, falling back direct\n");
+			shm_free(ptask);
+			goto direct_clean;
+		}
+
+		ksr_tcpx_task_result_recv(&rtask, process_no);
+		if(rtask == NULL) {
+			LM_ERR("failed to receive tls clean result for conn %p\n", c);
+		} else {
+			shm_free(rtask);
+		}
+		shm_free(ptask);
+		return;
+	}
+
+direct_clean:
+	if(!is_tcp_main() && !_ksr_is_main) {
+		LM_WARN("not in supervisor or tcp main process [%s]\n",
+				pt[process_no].desc);
+	}
+	tls_h_tcpconn_clean_direct(c);
 }
 
 
@@ -709,6 +992,10 @@ void tls_h_tcpconn_close_f(struct tcp_connection *c, int fd)
 	 * tcpconn_put_destroy()+tcpconn_close_main_fd() the connection might
 	 * still be in a writer, so in this case locking is needed.
 	 */
+	if(!is_tcp_main() && !_ksr_is_main) {
+		LM_WARN("not in superviser or tcp main process [%s]\n",
+				pt[process_no].desc);
+	}
 	DBG("Closing SSL connection %p\n", c->extra_data);
 	if(unlikely(cfg_get(tls, tls_cfg, send_close_notify) && c->extra_data)) {
 		lock_get(&c->write_lock);
@@ -722,16 +1009,99 @@ void tls_h_tcpconn_close_f(struct tcp_connection *c, int fd)
 		if(tls_set_mbufs(c, &rd, &wr) == 0) {
 			tls_shutdown(c); /* shutdown only on successful set fd */
 			/* write as much as possible and update wr.
-				 * Since this is a close, we don't want to queue the write
-				 * (if it can't write immediately, just fail silently)
-				 */
+			 * Since this is a close, we don't want to queue the write
+			 * (if it can't write immediately, just fail silently)
+			 */
 			if(wr.used)
 				_tcpconn_write_nb(fd, c, (char *)wr.buf, wr.used);
 			/* we don't bother reading anything (we don't want to wait
-				on close) */
+			   on close) */
 		}
 		lock_release(&c->write_lock);
 	}
+}
+
+
+static char *get_tls_domain_str(
+		struct tcp_connection *c, struct ip_addr *ip, unsigned short port)
+{
+	tls_domain_t *dom;
+	char *dom_str;
+	tls_domains_cfg_t *cfg;
+	str *sname = NULL;
+	str *srvid = NULL;
+
+	lock_get(tls_domains_cfg_lock);
+	cfg = *tls_domains_cfg;
+	atomic_inc(&cfg->ref_count);
+	lock_release(tls_domains_cfg_lock);
+
+	if(c->flags & F_CONN_PASSIVE) {
+		dom = tls_lookup_cfg(cfg, TLS_DOMAIN_SRV, ip, port, 0, 0);
+	} else {
+		sname = tls_get_connect_server_name(c);
+		srvid = tls_get_connect_server_id(c);
+		dom = tls_lookup_cfg(cfg, TLS_DOMAIN_CLI, ip, port, sname, srvid);
+	}
+
+	dom_str = tls_domain_str(dom);
+	atomic_dec(&cfg->ref_count);
+
+	return dom_str;
+}
+
+
+int tls_h_match_domain_f(
+		struct tcp_connection *c, struct ip_addr *ip, unsigned short port)
+{
+	struct tls_extra_data *tls_c;
+	char *dom_str;
+	str dom;
+
+	if(c->type != PROTO_TLS) {
+		LM_ERR("Connection is not TLS\n");
+		return 0;
+	}
+
+	tls_c = (struct tls_extra_data *)c->extra_data;
+
+	if(!c->extra_data) {
+		LM_ERR("called before tls_complete_init()\n");
+		return 0;
+	}
+
+	dom_str = get_tls_domain_str(c, ip, port);
+	STR_SET(dom, dom_str);
+
+	return STR_EQ(tls_c->dom, dom);
+}
+
+
+int tls_h_match_connections_domain_f(
+		struct tcp_connection *l_c, struct tcp_connection *r_c)
+{
+	struct tls_extra_data *l_tls_c, *r_tls_c;
+	char *l_dom_str;
+	str l_dom;
+
+	l_tls_c = (struct tls_extra_data *)l_c->extra_data;
+	r_tls_c = (struct tls_extra_data *)r_c->extra_data;
+
+	if(!r_tls_c)
+		return 1; //consider connection wihout extra_data as matched to keep old behavior
+
+	if(l_tls_c)
+		return STR_EQ(l_tls_c->dom, r_tls_c->dom);
+
+	if(l_c->type != PROTO_TLS) {
+		LM_ERR("Connection is not TLS\n");
+		return 0;
+	}
+
+	l_dom_str = get_tls_domain_str(l_c, &l_c->rcv.dst_ip, l_c->rcv.dst_port);
+	STR_SET(l_dom, l_dom_str);
+
+	return STR_EQ(l_dom, r_tls_c->dom);
 }
 
 
@@ -740,39 +1110,18 @@ typedef int (*tcp_low_level_send_t)(int fd, struct tcp_connection *c, char *buf,
 		unsigned len, snd_flags_t send_flags, long *resp, int locked);
 
 
-/** tls encrypt before sending function.
- * It is a callback that will be called by the tcp code, before a send
- * on TLS would be attempted. It should replace the input buffer with a
- * new static buffer containing the TLS processed data.
- * If the input buffer could not be fully encoded (e.g. run out of space
- * in the internal static buffer), it should set rest_buf and rest_len to
- * the remaining part, so that it could be called again once the output has
- * been used (sent). The send_flags used are also passed and they can be
- * changed (e.g. to disallow a close() after a partial encode).
- * WARNING: it must always be called with c->write_lock held!
- * @param c - tcp connection
- * @param pbuf - pointer to buffer (value/result, on success it will be
- *               replaced with a static buffer).
- * @param plen - pointer to buffer size (value/result, on success it will be
- *               replaced with the size of the replacement buffer.
- * @param rest_buf - (result) should be filled with a pointer to the
- *                remaining unencoded part of the original buffer if any,
- *                0 otherwise.
- * @param rest_len - (result) should be filled with the length of the
- *                 remaining unencoded part of the original buffer (0 if
- *                 the original buffer was fully encoded).
- * @param send_flags - pointer to the send_flags that will be used for sending
- *                     the message.
- * @return *plen on success (>=0), < 0 on error.
+/**
+ * tls encrypt helper before sending function.
+ * - parameters same as tls_h_encode_mp_f() with extr wr_buf which is a static
+ *   or global buffer to write to (its size TLS_WR_MBUF_SZ)
  */
-int tls_h_encode_f(struct tcp_connection *c, const char **pbuf,
+int tls_h_encode_helper_f(struct tcp_connection *c, const char **pbuf,
 		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
-		snd_flags_t *send_flags)
+		snd_flags_t *send_flags, unsigned char *wr_buf)
 {
 	int n, offs;
 	SSL *ssl = NULL;
 	struct tls_extra_data *tls_c;
-	static unsigned char wr_buf[TLS_WR_MBUF_SZ];
 	struct tls_mbuf rd, wr;
 	int ssl_error;
 	char *err_src;
@@ -802,7 +1151,7 @@ int tls_h_encode_f(struct tcp_connection *c, const char **pbuf,
 	tls_c = (struct tls_extra_data *)c->extra_data;
 	ssl = tls_c->ssl;
 	tls_mbuf_init(&rd, 0, 0); /* no read */
-	tls_mbuf_init(&wr, wr_buf, sizeof(wr_buf));
+	tls_mbuf_init(&wr, wr_buf, TLS_WR_MBUF_SZ * sizeof(unsigned char));
 	/* clear text already queued (WANTS_READ) queue directly*/
 	if(unlikely(tls_write_wants_read(tls_c))) {
 		TLS_WR_TRACE("(%p) WANTS_READ queue present => queueing"
@@ -884,15 +1233,15 @@ redo_wr:
 				}
 				tls_c->flags |= F_TLS_CON_WR_WANTS_RD;
 				/* buffer queued for a future send attempt, after first
-				 * reading some data (key exchange) => don't allow immediate
-				 * closing of the connection */
+			 * reading some data (key exchange) => don't allow immediate
+			 * closing of the connection */
 				send_flags->f &= ~SND_F_CON_CLOSE;
 				break; /* or goto end */
 			case SSL_ERROR_WANT_WRITE:
 				if(unlikely(offs == 0)) {
 					/*  error, no record fits in the buffer or
-					 * no partial write enabled and buffer to small to fit
-					 * all the records */
+				 * no partial write enabled and buffer to small to fit
+				 * all the records */
 					BUG("write buffer too small (%d/%d bytes)\n", wr.used,
 							wr.size);
 					goto bug;
@@ -901,7 +1250,7 @@ redo_wr:
 					*rest_buf = buf + offs;
 					*rest_len = len - offs;
 					/* this function should be called again => disallow
-					 * immediate closing of the connection */
+				 * immediate closing of the connection */
 					send_flags->f &= ~SND_F_CON_CLOSE;
 					TLS_WR_TRACE("(%p) SSL_ERROR_WANT_WRITE partial write"
 								 " (written %p , %d, rest_buf=%p"
@@ -924,22 +1273,22 @@ redo_wr:
 #if OPENSSL_VERSION_NUMBER >= 0x00907000L /*0.9.7*/
 			case SSL_ERROR_WANT_CONNECT:
 				/* only if the underlying BIO is not yet connected
-				 * and the call would block in connect().
-				 * (not possible in our case) */
+			 * and the call would block in connect().
+			 * (not possible in our case) */
 				BUG("unexpected SSL_ERROR_WANT_CONNECT\n");
 				break;
 			case SSL_ERROR_WANT_ACCEPT:
 				/* only if the underlying BIO is not yet connected
-				 * and call would block in accept()
-				 * (not possible in our case) */
+			 * and call would block in accept()
+			 * (not possible in our case) */
 				BUG("unexpected SSL_ERROR_WANT_ACCEPT\n");
 				break;
 #endif
 			case SSL_ERROR_WANT_X509_LOOKUP:
 				/* can only appear on client application and it indicates that
-				 * an installed client cert. callback should be called again
-				 * (it returned < 0 indicated that it wants to be called
-				 * later). Not possible in our case */
+			 * an installed client cert. callback should be called again
+			 * (it returned < 0 indicated that it wants to be called
+			 * later). Not possible in our case */
 				BUG("unsupported SSL_ERROR_WANT_X509_LOOKUP");
 				goto bug;
 			case SSL_ERROR_SYSCALL:
@@ -990,6 +1339,169 @@ ssl_eof:
 	return *plen;
 }
 
+/** tls encrypt before sending function.
+ * It is a callback that will be called by the tcp code, before a send
+ * on TLS would be attempted. It should replace the input buffer with a
+ * new static buffer containing the TLS processed data.
+ * If the input buffer could not be fully encoded (e.g. run out of space
+ * in the internal static buffer), it should set rest_buf and rest_len to
+ * the remaining part, so that it could be called again once the output has
+ * been used (sent). The send_flags used are also passed and they can be
+ * changed (e.g. to disallow a close() after a partial encode).
+ * WARNING: it must always be called with c->write_lock held!
+ * @param c - tcp connection
+ * @param pbuf - pointer to buffer (value/result, on success it will be
+ *               replaced with a static buffer).
+ * @param plen - pointer to buffer size (value/result, on success it will be
+ *               replaced with the size of the replacement buffer.
+ * @param rest_buf - (result) should be filled with a pointer to the
+ *                remaining unencoded part of the original buffer if any,
+ *                0 otherwise.
+ * @param rest_len - (result) should be filled with the length of the
+ *                 remaining unencoded part of the original buffer (0 if
+ *                 the original buffer was fully encoded).
+ * @param send_flags - pointer to the send_flags that will be used for sending
+ *                     the message.
+ * @return *plen on success (>=0), < 0 on error.
+ */
+unsigned char *_ksr_tls_wr_buf = NULL;
+int tls_h_encode_mp_f(struct tcp_connection *c, const char **pbuf,
+		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
+		snd_flags_t *send_flags)
+{
+	static unsigned char wr_buf[TLS_WR_MBUF_SZ];
+
+	return tls_h_encode_helper_f(
+			c, pbuf, plen, rest_buf, rest_len, send_flags, wr_buf);
+}
+
+/**
+ *
+ */
+typedef struct tls_encode_params
+{
+	struct tcp_connection *c;
+	char *pbuf;
+	unsigned int plen;
+	char *rest_buf;
+	unsigned int rest_len;
+	snd_flags_t send_flags;
+	int pidx;
+} tls_encode_params_t;
+
+/**
+ *
+ */
+static void tls_h_encode_mt_thread_cb(void *p, int pidx)
+{
+	tls_encode_params_t *eparams = NULL;
+	tcpx_task_result_t *rtask = NULL;
+	unsigned char *wr_buf = NULL;
+
+	eparams = (tls_encode_params_t *)p;
+
+	rtask = (tcpx_task_result_t *)shm_mallocxz(sizeof(tcpx_task_result_t));
+	if(rtask == NULL) {
+		SHM_MEM_ERROR;
+		ksr_tcpx_thread_eresult(rtask, pidx);
+		return;
+	}
+	wr_buf = ksr_tcpx_thread_wrbuf(eparams->pidx);
+	rtask->code =
+			tls_h_encode_helper_f(eparams->c, (const char **)&eparams->pbuf,
+					&eparams->plen, (const char **)&eparams->rest_buf,
+					&eparams->rest_len, &eparams->send_flags, wr_buf);
+	rtask->data = eparams;
+	ksr_tcpx_thread_eresult(rtask, pidx);
+
+	return;
+}
+
+/**
+ * to execute task on tcp main process multi-thread mode
+ * - for parameters see tls_h_encode_mp_f(...)
+ */
+int tls_h_encode_mt_f(struct tcp_connection *c, const char **pbuf,
+		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
+		snd_flags_t *send_flags)
+{
+	int dsize = 0;
+	tcpx_task_t *ptask = NULL;
+	tcpx_task_result_t *rtask = NULL;
+	tls_encode_params_t *eparams = NULL;
+	char *ps = NULL;
+	int ret = 0;
+
+	LM_DBG("preparing task for tcp main process threads\n");
+
+	dsize = sizeof(tcpx_task_t) + sizeof(tls_encode_params_t)
+			+ (*plen) * sizeof(char) + 1;
+
+	ptask = (tcpx_task_t *)shm_mallocxz(dsize);
+	if(ptask == NULL) {
+		SHM_MEM_ERROR;
+		return -1;
+	}
+	ptask->exec = tls_h_encode_mt_thread_cb;
+	ptask->param = (void *)((char *)ptask + sizeof(tcpx_task_t));
+	eparams = (tls_encode_params_t *)((char *)ptask + sizeof(tcpx_task_t));
+	ps = (char *)eparams + sizeof(tls_encode_params_t);
+
+	eparams->c = c;
+	eparams->pbuf = ps;
+	memcpy(eparams->pbuf, *pbuf, *plen);
+	eparams->plen = *plen;
+	eparams->rest_buf = (char *)*rest_buf;
+	eparams->rest_len = *rest_len;
+	if(send_flags != NULL) {
+		memcpy(&eparams->send_flags, send_flags, sizeof(snd_flags_t));
+	}
+	eparams->pidx = process_no;
+
+	if(ksr_tcpx_task_send(ptask, process_no) < 0) {
+		LM_ERR("failed to send the task\n");
+		shm_free(ptask);
+		return -1;
+	}
+
+	ksr_tcpx_task_result_recv(&rtask, process_no);
+
+	if(rtask == NULL) {
+		LM_ERR("failed to get the result\n");
+		shm_free(ptask);
+		return -1;
+	}
+	ret = rtask->code;
+
+	*pbuf = eparams->pbuf;
+	*plen = eparams->plen;
+	if(eparams->rest_buf != NULL) {
+		*rest_buf = *pbuf + (eparams->rest_buf - ps);
+	}
+	*rest_len = eparams->rest_len;
+	if(send_flags != NULL) {
+		memcpy(send_flags, &eparams->send_flags, sizeof(snd_flags_t));
+	}
+
+	shm_free(ptask);
+	shm_free(rtask);
+	return ret;
+}
+
+/**
+ * tls encode core callback
+ * - for parameters see tls_h_encode_mp_f(...)
+ */
+int tls_h_encode_f(struct tcp_connection *c, const char **pbuf,
+		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
+		snd_flags_t *send_flags)
+{
+	if(ksr_tcp_main_threads == 0) {
+		return tls_h_encode_mp_f(c, pbuf, plen, rest_buf, rest_len, send_flags);
+	} else {
+		return tls_h_encode_mt_f(c, pbuf, plen, rest_buf, rest_len, send_flags);
+	}
+}
 
 /** tls read.
  * Each modification of ssl data structures has to be protected, another process
@@ -1018,7 +1530,7 @@ ssl_eof:
  *         tcp connection flags and might set c->state and r->error on
  *         EOF or error).
  */
-int tls_h_read_f(struct tcp_connection *c, rd_conn_flags_t *flags)
+int tls_h_read_mp_f(struct tcp_connection *c, rd_conn_flags_t *flags)
 {
 	struct tcp_req *r;
 	int bytes_free, bytes_read, read_size, ssl_error, ssl_read;
@@ -1061,7 +1573,7 @@ int tls_h_read_f(struct tcp_connection *c, rd_conn_flags_t *flags)
 redo_read:
 	/* if data queued from a previous read(), use it (don't perform
 	 * a real read()).
-	*/
+	 */
 	if(unlikely(tls_c->enc_rd_buf)) {
 		/* use queued data */
 		/* safe to use without locks, because only read changes it and
@@ -1076,7 +1588,7 @@ redo_read:
 		rd.used = enc_rd_buf->size - enc_rd_buf->pos;
 	} else {
 		/* if we were using using queued data before, free & reset the
-			the queued read data before performing the real read() */
+		   the queued read data before performing the real read() */
 		if(unlikely(enc_rd_buf)) {
 			TLS_RD_TRACE("(%p, %p) reset prev. used enc_rd_buf (%p)\n", c,
 					flags, enc_rd_buf);
@@ -1090,8 +1602,8 @@ redo_read:
 		if(likely(!(*flags & (RD_CONN_EOF | RD_CONN_SHORT_READ)))) {
 			/* don't read more than the free bytes in the tcp req buffer */
 			read_size = MIN_unsigned(rd.size, bytes_free);
-			bytes_read =
-					tcp_read_data(c->fd, c, (char *)rd.buf, read_size, flags);
+			bytes_read = tcp_read_data(
+					_tconfd(c), c, (char *)rd.buf, read_size, flags);
 			TLS_RD_TRACE("(%p, %p) tcp_read_data(..., %d, *%d) => %d bytes\n",
 					c, flags, read_size, *flags, bytes_read);
 			/* try SSL_read even on 0 bytes read, it might have
@@ -1167,62 +1679,62 @@ continue_ssl_read:
 			}
 		} else {
 			/* if bytes in then decrypt read buffer into tcpconn req.
-				 * buffer */
+			 * buffer */
 			tls_openssl_clear_errors();
 			n = SSL_read(ssl, r->pos, bytes_free);
 		}
 		/** handle SSL_read() return.
-			 *  There are 3 main cases, each with several sub-cases, depending
-			 *  on whether or not the output buffer was filled, if there
-			 *  is still unconsumed input data in the input buffer (rd)
-			 *  and if there is "cached" data in the internal openssl
-			 *  buffers.
-			 *  0. error (n<=0):
-			 *     SSL_ERROR_WANT_READ - input data fully
-			 *       consumed, no more returnable cached data inside openssl
-			 *       => exit.
-			 *     SSL_ERROR_WANT_WRITE - should never happen (the write
-			 *       buffer is big enough to handle any re-negociation).
-			 *     SSL_ERROR_ZERO_RETURN - ssl level shutdown => exit.
-			 *    other errors are unexpected.
-			 * 1. output buffer filled (n == bytes_free):
-			 *    1i.  - still unconsumed input, nothing buffered by openssl
-			 *    1ip. - unconsumed input + buffered data by openssl (pending
-			 *			 on the next SSL_read).
-			 *    1p.  - completely consumed input, buffered data internally
-			 *            by openssl (pending).
-			 *           Likely to happen, about the only case when
-			 *           SSL_pending() could be used (but only if readahead=0).
-			 *    1f.  - consumed input, no buffered data.
-			 * 2. output buffer not fully filled (n < bytes_free):
-			 *     2i. - still unconsumed input, nothing buffered by openssl.
-			 *           This can appear if SSL readahead is 0 (SSL_read()
-			 *           tries to get only 1 record from the input).
-			 *     2ip. - unconsumed input and buffered data by openssl.
-			 *            Unlikely to happen (e.g. readahead is 1, more
-			 *            records are buffered internally by openssl, but
-			 *            there was not enough space for buffering the whole
-			 *            input).
-			 *     2p  - consumed input, but buffered data by openssl.
-			 *            It happens especially when readahead is 1.
-			 *     2f.  - consumed input, no buffered data.
-			 *
-			 * One should repeat SSL_read() until and error is detected
-			 *  (0*) or the input and internal ssl buffers are fully consumed
-			 *  (1f or 2f). However in general is not possible to see if
-			 *  SSL_read() could return more data. SSL_pending() has very
-			 *  limited usability (basically it would return !=0 only if there
-			 *  was no enough space in the output buffer and only if this did
-			 *  not happen at a record boundary).
-			 * The solution is to repeat SSL_read() until error or until
-			 *  the output buffer is filled (0* or 1*).
-			 *  In the later case, this whole function should be called again
-			 *  once there is more output space (set RD_CONN_REPEAT_READ).
-			 */
+		 *  There are 3 main cases, each with several sub-cases, depending
+		 *  on whether or not the output buffer was filled, if there
+		 *  is still unconsumed input data in the input buffer (rd)
+		 *  and if there is "cached" data in the internal openssl
+		 *  buffers.
+		 *  0. error (n<=0):
+		 *     SSL_ERROR_WANT_READ - input data fully
+		 *       consumed, no more returnable cached data inside openssl
+		 *       => exit.
+		 *     SSL_ERROR_WANT_WRITE - should never happen (the write
+		 *       buffer is big enough to handle any re-negociation).
+		 *     SSL_ERROR_ZERO_RETURN - ssl level shutdown => exit.
+		 *    other errors are unexpected.
+		 * 1. output buffer filled (n == bytes_free):
+		 *    1i.  - still unconsumed input, nothing buffered by openssl
+		 *    1ip. - unconsumed input + buffered data by openssl (pending
+		 *			 on the next SSL_read).
+		 *    1p.  - completely consumed input, buffered data internally
+		 *            by openssl (pending).
+		 *           Likely to happen, about the only case when
+		 *           SSL_pending() could be used (but only if readahead=0).
+		 *    1f.  - consumed input, no buffered data.
+		 * 2. output buffer not fully filled (n < bytes_free):
+		 *     2i. - still unconsumed input, nothing buffered by openssl.
+		 *           This can appear if SSL readahead is 0 (SSL_read()
+		 *           tries to get only 1 record from the input).
+		 *     2ip. - unconsumed input and buffered data by openssl.
+		 *            Unlikely to happen (e.g. readahead is 1, more
+		 *            records are buffered internally by openssl, but
+		 *            there was not enough space for buffering the whole
+		 *            input).
+		 *     2p  - consumed input, but buffered data by openssl.
+		 *            It happens especially when readahead is 1.
+		 *     2f.  - consumed input, no buffered data.
+		 *
+		 * One should repeat SSL_read() until and error is detected
+		 *  (0*) or the input and internal ssl buffers are fully consumed
+		 *  (1f or 2f). However in general is not possible to see if
+		 *  SSL_read() could return more data. SSL_pending() has very
+		 *  limited usability (basically it would return !=0 only if there
+		 *  was no enough space in the output buffer and only if this did
+		 *  not happen at a record boundary).
+		 * The solution is to repeat SSL_read() until error or until
+		 *  the output buffer is filled (0* or 1*).
+		 *  In the later case, this whole function should be called again
+		 *  once there is more output space (set RD_CONN_REPEAT_READ).
+		 */
 
 		if(unlikely(tls_c->flags & F_TLS_CON_RENEGOTIATION)) {
 			/* Fix CVE-2009-3555 - disable renegotiation if started by client
-				 * - simulate SSL EOF to force close connection*/
+			 * - simulate SSL EOF to force close connection*/
 			tls_dbg = cfg_get(tls, tls_cfg, debug);
 			LOG(tls_dbg,
 					"Reading on a renegotiation of connection (n:%d) (%d)\n", n,
@@ -1250,8 +1762,8 @@ continue_ssl_read:
 		TLS_RD_TRACE(
 				"(%p, %p) tcpconn_send_unsafe %d bytes\n", c, flags, wr.used);
 		/* something was written and it's not ssl EOF*/
-		if(unlikely(tcpconn_send_unsafe(
-							c->fd, c, (char *)wr.buf, wr.used, c->send_flags)
+		if(unlikely(tcpconn_send_unsafe(_tconfd(c), c, (char *)wr.buf, wr.used,
+							c->send_flags)
 					< 0)) {
 			tls_set_mbufs(c, 0, 0);
 			lock_release(&c->write_lock);
@@ -1271,7 +1783,7 @@ continue_ssl_read:
 			break;
 		case SSL_ERROR_ZERO_RETURN:
 			/* SSL EOF */
-			TLS_RD_TRACE("(%p, %p) SSL EOF (fd=%d)\n", c, flags, c->fd);
+			TLS_RD_TRACE("(%p, %p) SSL EOF (fd=%d)\n", c, flags, _tconfd(c));
 			goto ssl_eof;
 		case SSL_ERROR_WANT_READ:
 			TLS_RD_TRACE("(%p, %p) SSL_ERROR_WANT_READ *flags=%d\n", c, flags,
@@ -1287,8 +1799,8 @@ continue_ssl_read:
 			if(unlikely((*flags & (RD_CONN_EOF | RD_CONN_SHORT_READ)) == 0)
 					&& bytes_free) {
 				/* there might still be data to read and there is space
-				 * to decrypt it in tcp_req (no byte has been written into
-				 * tcp_req in this case) */
+			 * to decrypt it in tcp_req (no byte has been written into
+			 * tcp_req in this case) */
 				TLS_RD_TRACE("(%p, %p) redo read *flags=%d bytes_free=%d\n", c,
 						flags, *flags, bytes_free);
 				goto redo_read;
@@ -1297,8 +1809,8 @@ continue_ssl_read:
 		case SSL_ERROR_WANT_WRITE:
 			if(wr.used) {
 				/* something was written => buffer not big enough to hold
-				 * everything => reset buffer & retry (the tcp_write already
-				 * happened if we are here) */
+			 * everything => reset buffer & retry (the tcp_write already
+			 * happened if we are here) */
 				TLS_RD_TRACE("(%p) SSL_ERROR_WANT_WRITE partial write"
 							 " (written  %d), retrying\n",
 						c, wr.used);
@@ -1322,22 +1834,22 @@ continue_ssl_read:
 #if OPENSSL_VERSION_NUMBER >= 0x00907000L /*0.9.7*/
 		case SSL_ERROR_WANT_CONNECT:
 			/* only if the underlying BIO is not yet connected
-			 * and the call would block in connect().
-			 * (not possible in our case) */
+		 * and the call would block in connect().
+		 * (not possible in our case) */
 			BUG("unexpected SSL_ERROR_WANT_CONNECT\n");
 			goto bug;
 		case SSL_ERROR_WANT_ACCEPT:
 			/* only if the underlying BIO is not yet connected
-			 * and call would block in accept()
-			 * (not possible in our case) */
+		 * and call would block in accept()
+		 * (not possible in our case) */
 			BUG("unexpected SSL_ERROR_WANT_ACCEPT\n");
 			goto bug;
 #endif
 		case SSL_ERROR_WANT_X509_LOOKUP:
 			/* can only appear on client application and it indicates that
-			 * an installed client cert. callback should be called again
-			 * (it returned < 0 indicated that it wants to be called
-			 * later). Not possible in our case */
+		 * an installed client cert. callback should be called again
+		 * (it returned < 0 indicated that it wants to be called
+		 * later). Not possible in our case */
 			BUG("unsupported SSL_ERROR_WANT_X509_LOOKUP");
 			goto bug;
 		case SSL_ERROR_SYSCALL:
@@ -1479,6 +1991,106 @@ bug:
 	return -1;
 }
 
+/**
+ *
+ */
+typedef struct tls_read_params
+{
+	struct tcp_connection *c;
+	rd_conn_flags_t flags;
+	int pidx;
+} tls_read_params_t;
+
+/**
+ *
+ */
+static void tls_h_read_mt_thread_cb(void *p, int pidx)
+{
+	tls_read_params_t *eparams = NULL;
+	tcpx_task_result_t *rtask = NULL;
+
+	eparams = (tls_read_params_t *)p;
+
+	rtask = (tcpx_task_result_t *)shm_mallocxz(sizeof(tcpx_task_result_t));
+	if(rtask == NULL) {
+		SHM_MEM_ERROR;
+		ksr_tcpx_thread_eresult(rtask, pidx);
+		return;
+	}
+	rtask->code = tls_h_read_mp_f(eparams->c, &eparams->flags);
+	rtask->data = eparams;
+	ksr_tcpx_thread_eresult(rtask, pidx);
+
+	return;
+}
+
+/**
+ * to execute on tcp main process multi-thread mode
+ * - for parameters see tls_h_read_mp_f(...)
+ */
+int tls_h_read_mt_f(struct tcp_connection *c, rd_conn_flags_t *flags)
+{
+	int dsize = 0;
+	tcpx_task_t *ptask = NULL;
+	tcpx_task_result_t *rtask = NULL;
+	tls_read_params_t *eparams = NULL;
+	int ret = 0;
+
+	LM_DBG("preparing task for tcp main process threads\n");
+
+	dsize = sizeof(tcpx_task_t) + sizeof(tls_read_params_t);
+
+	ptask = (tcpx_task_t *)shm_mallocxz(dsize);
+	if(ptask == NULL) {
+		SHM_MEM_ERROR;
+		return -1;
+	}
+	ptask->exec = tls_h_read_mt_thread_cb;
+	ptask->param = (void *)((char *)ptask + sizeof(tcpx_task_t));
+	eparams = (tls_read_params_t *)((char *)ptask + sizeof(tcpx_task_t));
+
+	eparams->c = c;
+	if(flags != NULL) {
+		memcpy(&eparams->flags, flags, sizeof(rd_conn_flags_t));
+	}
+	eparams->pidx = process_no;
+
+	if(ksr_tcpx_task_send(ptask, process_no) < 0) {
+		LM_ERR("failed to send the task\n");
+		shm_free(ptask);
+		return -1;
+	}
+
+	ksr_tcpx_task_result_recv(&rtask, process_no);
+
+	if(rtask == NULL) {
+		LM_ERR("failed to get the result\n");
+		shm_free(ptask);
+		return -1;
+	}
+	ret = rtask->code;
+
+	if(flags != NULL) {
+		memcpy(flags, &eparams->flags, sizeof(rd_conn_flags_t));
+	}
+
+	shm_free(ptask);
+	shm_free(rtask);
+	return ret;
+}
+
+/**
+ * tls read core callback
+ * - for parameters see tls_h_read_mp_f(...)
+ */
+int tls_h_read_f(struct tcp_connection *c, rd_conn_flags_t *flags)
+{
+	if(ksr_tcp_main_threads == 0) {
+		return tls_h_read_mp_f(c, flags);
+	} else {
+		return tls_h_read_mt_f(c, flags);
+	}
+}
 
 static int _tls_evrt_connection_out = -1; /* default disabled */
 str sr_tls_event_callback = STR_NULL;

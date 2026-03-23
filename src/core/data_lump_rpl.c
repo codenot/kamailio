@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -111,6 +113,53 @@ void free_lump_rpl(struct lump_rpl *lump)
 	}
 }
 
+
+void free_reply_lump_list(struct lump_rpl *lump)
+{
+	struct lump_rpl *foo, *bar;
+	for(foo = lump; foo;) {
+		bar = foo->next;
+		free_lump_rpl(foo);
+		foo = bar;
+	}
+}
+
+
+struct lump_rpl *copy_reply_lump_list(struct lump_rpl *lump_list)
+{
+	struct lump_rpl *nlump = NULL;
+	struct lump_rpl *flump = NULL;
+	struct lump_rpl *llump = NULL;
+	struct lump_rpl *clump = NULL;
+
+	for(clump = lump_list; clump; clump = clump->next) {
+		nlump = (struct lump_rpl *)pkg_malloc(
+				sizeof(struct lump_rpl) + clump->text.len + 1);
+		if(nlump == NULL) {
+			PKG_MEM_ERROR;
+			goto error;
+		}
+		memset(nlump, 0, sizeof(struct lump_rpl));
+		nlump->text.s = ((char *)nlump) + sizeof(struct lump_rpl);
+		memcpy(nlump->text.s, clump->text.s, clump->text.len);
+		nlump->text.len = clump->text.len;
+		nlump->text.s[nlump->text.len] = '\0';
+		nlump->flags = clump->flags & (LUMP_RPL_HDR | LUMP_RPL_BODY);
+		nlump->next = NULL;
+		if(flump == NULL) {
+			flump = nlump;
+		}
+		if(llump != NULL) {
+			llump->next = nlump;
+		}
+		llump = clump;
+	}
+	return flump;
+
+error:
+	free_reply_lump_list(flump);
+	return NULL;
+}
 
 void unlink_lump_rpl(struct sip_msg *msg, struct lump_rpl *lump)
 {

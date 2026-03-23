@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -235,7 +237,7 @@ static int digest_authenticate_hdr(sip_msg_t *msg, str *realm, str *table,
 	char ha1[256];
 	auth_cfg_result_t ret;
 	auth_result_t rauth;
-	struct hdr_field *h;
+	struct hdr_field *h = NULL;
 	auth_body_t *cred;
 	db1_res_t *result = NULL;
 
@@ -281,8 +283,6 @@ static int digest_authenticate_hdr(sip_msg_t *msg, str *realm, str *table,
 	}
 
 	cred = (auth_body_t *)h->parsed;
-	if(ahdr != NULL)
-		*ahdr = h;
 
 	rauth = get_ha1(&cred->digest.username, realm, table, ha1, &result);
 	if(rauth < 0) {
@@ -324,6 +324,9 @@ static int digest_authenticate_hdr(sip_msg_t *msg, str *realm, str *table,
 	}
 
 end:
+	if(ahdr != NULL) {
+		*ahdr = h;
+	}
 	if(result)
 		auth_dbf.free_result(auth_db_handle, result);
 	return ret;

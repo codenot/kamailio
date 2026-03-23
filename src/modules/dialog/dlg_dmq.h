@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -31,7 +33,6 @@
 
 extern dmq_api_t dlg_dmqb;
 extern dmq_peer_t *dlg_dmq_peer;
-extern dmq_resp_cback_t dlg_dmq_resp_callback;
 
 typedef enum
 {
@@ -47,6 +48,4 @@ int dlg_dmq_handle_msg(
 		struct sip_msg *msg, peer_reponse_t *resp, dmq_node_t *node);
 int dlg_dmq_replicate_action(dlg_dmq_action_t action, dlg_cell_t *dlg,
 		int needlock, dmq_node_t *node);
-int dlg_dmq_resp_callback_f(
-		struct sip_msg *msg, int code, dmq_node_t *node, void *param);
 #endif

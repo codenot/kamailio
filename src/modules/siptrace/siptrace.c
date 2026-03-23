@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -39,6 +41,7 @@
 #include "../../core/ip_addr.h"
 #include "../../core/mem/mem.h"
 #include "../../core/mem/shm_mem.h"
+#include "../../core/receive.h"
 #include "../../core/rpc.h"
 #include "../../core/rpc_lookup.h"
 #include "../../lib/srdb1/db.h"
@@ -52,6 +55,7 @@
 #include "../../core/str.h"
 #include "../../core/onsend.h"
 #include "../../core/events.h"
+#include "../../core/srapi.h"
 #include "../../core/kemi.h"
 
 #include "siptrace_data.h"
@@ -133,6 +137,9 @@ int siptrace_net_data_sent(sr_event_param_t *evp);
 static int _siptrace_init_mode = 0;
 static int _siptrace_mode = 0;
 
+#define SIPTRACE_DATA_MODE_ADVADDR 1 /* use advertised address */
+static int _siptrace_data_mode = 0;
+
 
 static str db_url = str_init(DEFAULT_DB_URL);
 static str siptrace_table = str_init("sip_trace");
@@ -187,12 +194,12 @@ sip_uri_t *trace_dup_uri = 0;
 static str _siptrace_evcb_msg = STR_NULL;
 static int _siptrace_evrt_msg_idx = -1;
 
-static unsigned short traced_user_avp_type = 0;
-static int_str traced_user_avp;
+static avp_flags_t traced_user_avp_type = 0;
+static avp_name_t traced_user_avp;
 static str traced_user_avp_str = {NULL, 0};
 
-static unsigned short trace_table_avp_type = 0;
-static int_str trace_table_avp;
+static avp_flags_t trace_table_avp_type = 0;
+static avp_name_t trace_table_avp;
 static str trace_table_avp_str = {NULL, 0};
 
 static str trace_local_ip = {NULL, 0};
@@ -222,9 +229,9 @@ static cmd_export_t cmds[] = {
 		ANY_ROUTE},
 	{"sip_trace_msg", (cmd_function)w_sip_trace_msg, 5, fixup_spve_all, fixup_free_spve_all,
 		ANY_ROUTE},
-	{"hlog", (cmd_function)w_hlog1, 1, fixup_spve_null, 0,
+	{"hlog", (cmd_function)w_hlog1, 1, fixup_spve_null, fixup_free_spve_null,
 		ANY_ROUTE},
-	{"hlog", (cmd_function)w_hlog2, 2, fixup_spve_spve, 0,
+	{"hlog", (cmd_function)w_hlog2, 2, fixup_spve_spve, fixup_free_spve_null,
 		ANY_ROUTE},
 	{"sip_trace_mode", (cmd_function)w_sip_trace_mode, 1, fixup_spve_null,
 		fixup_free_spve_null, ANY_ROUTE},
@@ -252,26 +259,27 @@ static param_export_t params[] = {
 	{"fromtag_column", PARAM_STR, &fromtag_column},
 	{"totag_column", PARAM_STR, &totag_column},
 	{"direction_column", PARAM_STR, &direction_column},
-	{"trace_flag", INT_PARAM, &trace_flag_param},
-	{"trace_on", INT_PARAM, &trace_on},
+	{"trace_flag", PARAM_INT, &trace_flag_param},
+	{"trace_on", PARAM_INT, &trace_on},
 	{"traced_user_avp", PARAM_STR, &traced_user_avp_str},
 	{"trace_table_avp", PARAM_STR, &trace_table_avp_str},
 	{"duplicate_uri", PARAM_STR, &trace_dup_uri_str},
-	{"trace_to_database", INT_PARAM, &trace_to_database},
+	{"trace_to_database", PARAM_INT, &trace_to_database},
 	{"trace_local_ip", PARAM_STR, &trace_local_ip},
-	{"trace_sl_acks", INT_PARAM, &trace_sl_acks},
-	{"xheaders_write", INT_PARAM, &trace_xheaders_write},
-	{"xheaders_read", INT_PARAM, &trace_xheaders_read},
-	{"hep_mode_on", INT_PARAM, &hep_mode_on},
+	{"trace_sl_acks", PARAM_INT, &trace_sl_acks},
+	{"xheaders_write", PARAM_INT, &trace_xheaders_write},
+	{"xheaders_read", PARAM_INT, &trace_xheaders_read},
+	{"hep_mode_on", PARAM_INT, &hep_mode_on},
 	{"force_send_sock", PARAM_STR, &trace_send_sock_str},
 	{"send_sock_addr", PARAM_STR, &trace_send_sock_str},
 	{"send_sock_name", PARAM_STR, &trace_send_sock_name_str},
-	{"hep_version", INT_PARAM, &hep_version},
-	{"hep_capture_id", INT_PARAM, &hep_capture_id},
-	{"trace_delayed", INT_PARAM, &trace_db_delayed},
-	{"trace_db_mode", INT_PARAM, &trace_db_mode},
+	{"hep_version", PARAM_INT, &hep_version},
+	{"hep_capture_id", PARAM_INT, &hep_capture_id},
+	{"trace_delayed", PARAM_INT, &trace_db_delayed},
+	{"trace_db_mode", PARAM_INT, &trace_db_mode},
 	{"trace_init_mode", PARAM_INT, &_siptrace_init_mode},
 	{"trace_mode", PARAM_INT, &_siptrace_mode},
+	{"data_mode", PARAM_INT, &_siptrace_data_mode},
 	{"evcb_msg", PARAM_STR, &_siptrace_evcb_msg},
 	{"trace_dialog_ack", PARAM_INT, &trace_dialog_ack},
 	{"trace_dialog_spiral", PARAM_INT, &trace_dialog_spiral},
@@ -2214,12 +2222,12 @@ static siptrace_data_t *siptrace_event_data = NULL;
 
 static int siptrace_exec_evcb_msg(siptrace_data_t *sto)
 {
-	int backup_rt;
 	run_act_ctx_t ctx;
 	run_act_ctx_t *bctx;
 	sr_kemi_eng_t *keng = NULL;
 	str evname = str_init("siptrace:msg");
 	sip_msg_t msg;
+	ksr_msg_env_links_t menv = {0};
 
 	if(_siptrace_evrt_msg_idx < 0 && _siptrace_evcb_msg.len <= 0) {
 		return 0;
@@ -2242,7 +2250,7 @@ static int siptrace_exec_evcb_msg(siptrace_data_t *sto)
 		return -1;
 	}
 
-	backup_rt = get_route_type();
+	ksr_msg_env_push(&menv);
 	set_route_type(EVENT_ROUTE);
 	init_run_actions_ctx(&ctx);
 
@@ -2261,8 +2269,9 @@ static int siptrace_exec_evcb_msg(siptrace_data_t *sto)
 	}
 	siptrace_event_data = NULL;
 
+	ksr_msg_env_reset();
 	free_sip_msg(&msg);
-	set_route_type(backup_rt);
+	ksr_msg_env_pop(&menv);
 	if(ctx.run_flags & DROP_R_F) {
 		return DROP_R_F;
 	}
@@ -2308,15 +2317,27 @@ int siptrace_net_data_recv(sr_event_param_t *evp)
 		sto.fromip.s = sto.fromip_buff;
 	}
 
-	sto.toip.len = snprintf(sto.toip_buff, SIPTRACE_ADDR_MAX, "%s:%s:%d",
-			siptrace_proto_name(nd->rcv->proto), ip_addr2strz(&nd->rcv->dst_ip),
-			(int)nd->rcv->dst_port);
-	if(sto.toip.len < 0 || sto.toip.len >= SIPTRACE_ADDR_MAX) {
-		LM_ERR("failed to format toip buffer (%d)\n", sto.toip.len);
-		sto.toip.s = SIPTRACE_ANYADDR;
-		sto.toip.len = SIPTRACE_ANYADDR_LEN;
-	} else {
+	if((_siptrace_data_mode & SIPTRACE_DATA_MODE_ADVADDR)
+			&& nd->rcv->bind_address != NULL
+			&& nd->rcv->bind_address->useinfo.sock_str.len > 0
+			&& (nd->rcv->bind_address->useinfo.sock_str.len
+					< SIPTRACE_ADDR_MAX - 1)) {
+		sto.toip.len = nd->rcv->bind_address->useinfo.sock_str.len;
+		memcpy(sto.toip_buff, nd->rcv->bind_address->useinfo.sock_str.s,
+				sto.toip.len);
+		sto.toip_buff[sto.toip.len] = '\0';
 		sto.toip.s = sto.toip_buff;
+	} else {
+		sto.toip.len = snprintf(sto.toip_buff, SIPTRACE_ADDR_MAX, "%s:%s:%d",
+				siptrace_proto_name(nd->rcv->proto),
+				ip_addr2strz(&nd->rcv->dst_ip), (int)nd->rcv->dst_port);
+		if(sto.toip.len < 0 || sto.toip.len >= SIPTRACE_ADDR_MAX) {
+			LM_ERR("failed to format toip buffer (%d)\n", sto.toip.len);
+			sto.toip.s = SIPTRACE_ANYADDR;
+			sto.toip.len = SIPTRACE_ANYADDR_LEN;
+		} else {
+			sto.toip.s = sto.toip_buff;
+		}
 	}
 
 	sto.dir = "in";
@@ -2408,6 +2429,7 @@ int siptrace_net_data_sent(sr_event_param_t *evp)
 	int proto;
 	int evcb_ret;
 	int ret = 0;
+	str vsock;
 
 	if(evp->data == 0)
 		return -1;
@@ -2437,14 +2459,19 @@ int siptrace_net_data_sent(sr_event_param_t *evp)
 		sto.fromip.len = SIPTRACE_ANYADDR_LEN;
 		proto = PROTO_UDP;
 	} else {
-		if(new_dst.send_sock->sock_str.len >= SIPTRACE_ADDR_MAX - 1) {
-			LM_ERR("socket string is too large: %d\n",
-					new_dst.send_sock->sock_str.len);
+		if((_siptrace_data_mode & SIPTRACE_DATA_MODE_ADVADDR)
+				&& new_dst.send_sock->useinfo.sock_str.len > 0) {
+			vsock = new_dst.send_sock->useinfo.sock_str;
+		} else {
+			vsock = new_dst.send_sock->sock_str;
+		}
+		if(vsock.len >= SIPTRACE_ADDR_MAX - 1) {
+			LM_ERR("socket string is too large: %d\n", vsock.len);
 			return -1;
 		}
-		strncpy(sto.fromip_buff, new_dst.send_sock->sock_str.s,
-				new_dst.send_sock->sock_str.len);
-		sto.fromip.len = new_dst.send_sock->sock_str.len;
+		memcpy(sto.fromip_buff, vsock.s, vsock.len);
+		sto.fromip.len = vsock.len;
+		sto.fromip_buff[sto.fromip.len] = '\0';
 		proto = new_dst.send_sock->proto;
 	}
 	sto.fromip.s = sto.fromip_buff;

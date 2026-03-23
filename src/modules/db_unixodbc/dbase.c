@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -25,10 +27,6 @@
 #include "../../core/mem/mem.h"
 #include "../../core/dprint.h"
 #include "../../core/async_task.h"
-#define KSR_RTHREAD_NEED_4PP
-#define KSR_RTHREAD_NEED_4P5I2P2
-#define KSR_RTHREAD_NEED_0P
-#include "../../core/rthreads.h"
 #include "../../lib/srdb1/db_query.h"
 #include "val.h"
 #include "connection.h"
@@ -84,7 +82,7 @@ static int reconnect(const db1_con_t *_h)
 /*
  * Send an SQL query to the server
  */
-static int db_unixodbc_submit_query_impl(const db1_con_t *_h, const str *_s)
+static int db_unixodbc_submit_query(const db1_con_t *_h, const str *_s)
 {
 	int ret = 0;
 	SQLCHAR sqlstate[7];
@@ -158,11 +156,6 @@ static int db_unixodbc_submit_query_impl(const db1_con_t *_h, const str *_s)
 	return ret;
 }
 
-static int db_unixodbc_submit_query(const db1_con_t *_h, const str *_s)
-{
-	return run_thread4PP((_thread_proto4PP)db_unixodbc_submit_query_impl,
-			(void *)_h, (void *)_s);
-}
 /**
  *
  */
@@ -187,24 +180,21 @@ void db_unixodbc_async_exec_task(void *param)
 		LM_ERR("failed to execute query [%.*s] on async worker\n", p[1].len,
 				p[1].s);
 	}
-	db_unixodbc_close(dbc);
+	db_do_con_free(dbc);
 }
 /**
  * Execute a raw SQL query via core async framework.
- * \param _h handle for the database
+ * \param _u database URL
  * \param _s raw query string
  * \return zero on success, negative value on failure
  */
-int db_unixodbc_submit_query_async(const db1_con_t *_h, const str *_s)
+int db_unixodbc_submit_query_async(const str *_u, const str *_s)
 {
-	struct db_id *di;
 	async_task_t *atask;
 	int asize;
 	str *p;
 
-	di = ((struct pool_con *)_h->tail)->id;
-
-	asize = sizeof(async_task_t) + 2 * sizeof(str) + di->url.len + _s->len + 2;
+	asize = sizeof(async_task_t) + 2 * sizeof(str) + _u->len + _s->len + 2;
 	atask = shm_malloc(asize);
 	if(atask == NULL) {
 		LM_ERR("no more shared memory to allocate %d\n", asize);
@@ -216,8 +206,8 @@ int db_unixodbc_submit_query_async(const db1_con_t *_h, const str *_s)
 
 	p = (str *)((char *)atask + sizeof(async_task_t));
 	p[0].s = (char *)p + 2 * sizeof(str);
-	p[0].len = di->url.len;
-	strncpy(p[0].s, di->url.s, di->url.len);
+	p[0].len = _u->len;
+	strncpy(p[0].s, _u->s, _u->len);
 	p[1].s = p[0].s + p[0].len + 1;
 	p[1].len = _s->len;
 	strncpy(p[1].s, _s->s, _s->len);
@@ -230,15 +220,22 @@ int db_unixodbc_submit_query_async(const db1_con_t *_h, const str *_s)
 
 	return 0;
 }
+
+int db_unixodbc_submit_insert_async(const db1_con_t *_h, const str *_s)
+{
+	struct db_id *di;
+	di = ((struct pool_con *)_h->tail)->id;
+	return db_unixodbc_submit_query_async(&di->url, _s);
+}
+
 extern char *db_unixodbc_tquote;
 
 /*
  * Initialize database module
  * No function should be called before this
  *
- * Init libssl in a thread
- */
-static db1_con_t *db_unixodbc_init0(const str *_url)
+  */
+db1_con_t *db_unixodbc_init(const str *_url)
 {
 	db1_con_t *c;
 	c = db_do_init(_url, (void *)db_unixodbc_new_connection);
@@ -247,23 +244,13 @@ static db1_con_t *db_unixodbc_init0(const str *_url)
 	return c;
 }
 
-db1_con_t *db_unixodbc_init(const str *_url)
-{
-	return run_threadP((_thread_proto)&db_unixodbc_init0, (void *)_url);
-}
-
 /*
  * Shut down database module
  * No function should be called after this
  */
-static void db_unixodbc_close_impl(db1_con_t *_h)
-{
-	return db_do_close(_h, db_unixodbc_free_connection);
-}
-
 void db_unixodbc_close(db1_con_t *_h)
 {
-	run_thread0P((_thread_proto0P)db_unixodbc_close_impl, _h);
+	return db_do_close(_h, db_unixodbc_free_connection);
 }
 
 /*
@@ -306,7 +293,7 @@ static int db_unixodbc_store_result(const db1_con_t *_h, db1_res_t **_r)
 /*
  * Release a result set from memory
  */
-static int db_unixodbc_free_result_impl(db1_con_t *_h, db1_res_t *_r)
+int db_unixodbc_free_result(db1_con_t *_h, db1_res_t *_r)
 {
 	if((!_h) || (!_r)) {
 		LM_ERR("invalid parameter value\n");
@@ -322,12 +309,6 @@ static int db_unixodbc_free_result_impl(db1_con_t *_h, db1_res_t *_r)
 	return 0;
 }
 
-int db_unixodbc_free_result(db1_con_t *_h, db1_res_t *_r)
-{
-	return run_thread4PP(
-			(_thread_proto4PP)db_unixodbc_free_result_impl, _h, _r);
-}
-
 /*
  * Query table for specified rows
  * _h: structure representing database connection
@@ -339,22 +320,13 @@ int db_unixodbc_free_result(db1_con_t *_h, db1_res_t *_r)
  * _nc: number of columns to return
  * _o: order by the specified column
  */
-static int db_unixodbc_query_impl(const db1_con_t *_h, const db_key_t *_k,
+int db_unixodbc_query(const db1_con_t *_h, const db_key_t *_k,
 		const db_op_t *_op, const db_val_t *_v, const db_key_t *_c,
 		const int _n, const int _nc, const db_key_t _o, db1_res_t **_r)
 {
 	return db_do_query(_h, _k, _op, _v, _c, _n, _nc, _o, _r,
 			db_unixodbc_val2str, db_unixodbc_submit_query,
 			db_unixodbc_store_result);
-}
-
-int db_unixodbc_query(const db1_con_t *_h, const db_key_t *_k,
-		const db_op_t *_op, const db_val_t *_v, const db_key_t *_c,
-		const int _n, const int _nc, const db_key_t _o, db1_res_t **_r)
-{
-	return run_thread4P5I2P2((_thread_proto4P5I2P2)db_unixodbc_query_impl,
-			(void *)_h, (void *)_k, (void *)_op, (void *)_v, (void *)_c, _n,
-			_nc, (void *)_o, (void *)_r);
 }
 
 /*!
@@ -534,13 +506,13 @@ int db_unixodbc_raw_query(const db1_con_t *_h, const str *_s, db1_res_t **_r)
 
 /**
  * Execute a raw SQL query via core async framework.
- * \param _h handle for the database
+ * \param _u database URL
  * \param _s raw query string
  * \return zero on success, negative value on failure
  */
-int db_unixodbc_raw_query_async(const db1_con_t *_h, const str *_s)
+int db_unixodbc_raw_query_async(const str *_u, const str *_s)
 {
-	return db_unixodbc_submit_query_async(_h, _s);
+	return db_unixodbc_submit_query_async(_u, _s);
 }
 /*
  * Insert a row into specified table
@@ -568,7 +540,7 @@ int db_unixodbc_insert_async(const db1_con_t *_h, const db_key_t *_k,
 		const db_val_t *_v, const int _n)
 {
 	return db_do_insert(_h, _k, _v, _n, db_unixodbc_val2str,
-			db_unixodbc_submit_query_async);
+			db_unixodbc_submit_insert_async);
 }
 /*
  * Delete a row from the specified table

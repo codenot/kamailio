@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -45,9 +47,10 @@
 
 
 /*! Which header fields should be skipped */
-#define tm_skip_hf(_hf)                                       \
-	(((_hf)->type == HDR_FROM_T) || ((_hf)->type == HDR_TO_T) \
-			|| ((_hf)->type == HDR_CALLID_T) || ((_hf)->type == HDR_CSEQ_T))
+#define tm_skip_hf(_hf)                                                     \
+	(((_hf)->type == HDR_FROM_T) || ((_hf)->type == HDR_TO_T)               \
+			|| ((_hf)->type == HDR_CALLID_T) || ((_hf)->type == HDR_CSEQ_T) \
+			|| ((_hf)->type == HDR_ROUTE_T))
 
 
 /* a forced_proto takes precedence if != PROTO_NONE */

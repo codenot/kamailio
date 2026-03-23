@@ -50,19 +50,19 @@
 #define ZSW(_c) ((_c) ? (_c) : "")
 
 /* returns string beginning and length without insignificant chars */
-#define trim_len(_len, _begin, _mystr)                             \
-	do {                                                           \
-		static char _c;                                            \
-		(_len) = (_mystr).len;                                     \
-		while((_len)                                               \
-				&& ((_c = (_mystr).s[(_len)-1]) == 0 || _c == '\r' \
-						|| _c == '\n' || _c == ' ' || _c == '\t')) \
-			(_len)--;                                              \
-		(_begin) = (_mystr).s;                                     \
-		while((_len) && ((_c = *(_begin)) == ' ' || _c == '\t')) { \
-			(_len)--;                                              \
-			(_begin)++;                                            \
-		}                                                          \
+#define trim_len(_len, _begin, _mystr)                               \
+	do {                                                             \
+		static char _c;                                              \
+		(_len) = (_mystr).len;                                       \
+		while((_len)                                                 \
+				&& ((_c = (_mystr).s[(_len) - 1]) == 0 || _c == '\r' \
+						|| _c == '\n' || _c == ' ' || _c == '\t'))   \
+			(_len)--;                                                \
+		(_begin) = (_mystr).s;                                       \
+		while((_len) && ((_c = *(_begin)) == ' ' || _c == '\t')) {   \
+			(_len)--;                                                \
+			(_begin)++;                                              \
+		}                                                            \
 	} while(0)
 
 #define trim_r(_mystr)                                                       \
@@ -145,7 +145,7 @@
 #define is_in_str(p, in) (p < in->s + in->len && *p)
 
 #define ksr_container_of(ptr, type, member) \
-	((type *)((char *)(ptr)-offsetof(type, member)))
+	((type *)((char *)(ptr) - offsetof(type, member)))
 
 /* links a value to a msgid */
 struct msgid_var
@@ -546,7 +546,8 @@ inline static int pathmax(void)
 #endif
 	if(pathmax == 0) { /* init */
 		pathmax = pathconf("/", _PC_PATH_MAX);
-		pathmax = (pathmax <= 0) ? PATH_MAX_GUESS : pathmax + 1;
+		pathmax = (pathmax <= 0 || pathmax >= INT_MAX - 1) ? PATH_MAX_GUESS
+														   : pathmax + 1;
 	}
 	return pathmax;
 }
@@ -698,6 +699,14 @@ static inline int str2ulong(str *_s, unsigned long *_r)
 static inline int str2int(str *_s, unsigned int *_r)
 {
 	str2unval(_s, _r, int, UINT_MAX);
+}
+
+/*
+ * Convert a str to unsigned short
+ */
+static inline int str2ushort(str *_s, unsigned short *_r)
+{
+	str2unval(_s, _r, short, USHRT_MAX);
 }
 
 
@@ -862,14 +871,19 @@ static inline str *shm_str_dup_block(const str *src)
  *        The copy will be zero-terminated
  * \param dst destination
  * \param src source
+ * \param mode if 1, free destination buffer if set
  * \return 0 on success, -1 on failure
  */
-static inline int shm_str_dup(str *dst, const str *src)
+static inline int shm_str_dup_mode(str *dst, const str *src, int mode)
 {
 	/* NULL checks */
 	if(dst == NULL || src == NULL) {
 		LM_ERR("NULL src or dst\n");
 		return -1;
+	}
+
+	if(mode == 1 && dst->s != NULL) {
+		shm_free(dst->s);
 	}
 
 	/**
@@ -897,6 +911,7 @@ static inline int shm_str_dup(str *dst, const str *src)
 	/* avoid memcpy from NULL source - undefined behaviour */
 	if(src->s == NULL) {
 		LM_WARN("shm_str_dup fallback; skip memcpy for src->s == NULL\n");
+		dst->s[0] = 0;
 		return 0;
 	}
 
@@ -905,6 +920,9 @@ static inline int shm_str_dup(str *dst, const str *src)
 
 	return 0;
 }
+
+#define shm_str_dup(dst, src) shm_str_dup_mode(dst, src, 0)
+#define shm_str_update(dst, src) shm_str_dup_mode(dst, src, 1)
 
 /**
  * \brief Make a copy of a char pointer to a char pointer using shm_malloc
@@ -997,6 +1015,11 @@ static inline int pkg_str_dup(str *dst, const str *src)
 		return -1;
 	}
 
+	if(dst->len == 0) {
+		dst->s[0] = 0;
+		return 0;
+	}
+
 	/* avoid memcpy from NULL source - undefined behaviour */
 	if(src->s == NULL) {
 		LM_WARN("pkg_str_dup fallback; skip memcpy for src->s == NULL\n");
@@ -1008,6 +1031,34 @@ static inline int pkg_str_dup(str *dst, const str *src)
 
 	return 0;
 }
+
+/**
+ * \brief Make a copy of a char pointer to a char pointer using pkg_malloc
+ * \param src source
+ * \return a pointer to the new allocated char on success, 0 on failure
+ */
+static inline char *pkg_char_dup(const char *src)
+{
+	char *rval;
+	int len;
+
+	if(!src) {
+		LM_ERR("NULL src or dst\n");
+		return NULL;
+	}
+
+	len = strlen(src) + 1;
+	rval = (char *)pkg_malloc(len);
+	if(!rval) {
+		PKG_MEM_ERROR;
+		return NULL;
+	}
+
+	memcpy(rval, src, len);
+
+	return rval;
+}
+
 
 /**
  * \brief Compare two str's case sensitive
@@ -1119,6 +1170,60 @@ static inline int strno2int(str *val, unsigned int *mask)
 	}
 }
 
+/**
+ * split time value in two (upper and lower 4-bytes) unsigned int values
+ * - time value representation on 8 bytes: UUUULLLL
+ * - lower 4 bytes are returned (LLLL)
+ * - upper 4 bytes can be stored in second paramter (UUUU)
+ */
+static inline unsigned int ksr_time_uint(time_t *tv, unsigned int *tu)
+{
+	unsigned int tl; /* lower 4 bytes */
+	unsigned long long v64;
+	time_t t;
+
+	if(tv != NULL) {
+		t = *tv;
+	} else {
+		t = time(NULL);
+	}
+	v64 = (unsigned long long)t;
+	tl = (unsigned int)(v64 & 0xFFFFFFFFULL);
+	if(tu != NULL) {
+		/* upper 4 bytes */
+		*tu = (unsigned int)((v64 >> 32) & 0xFFFFFFFFULL);
+	}
+
+	return tl;
+}
+
+/**
+ * split time value in two (upper and lower 4-bytes) signed int values
+ * - time value representation on 8 bytes: UUUULLLL
+ * - lower 4 bytes are returned (LLLL)
+ * - upper 4 bytes can be stored in second paramter (UUUU)
+ */
+static inline int ksr_time_sint(time_t *tv, int *tu)
+{
+	int tl; /* lower 4 bytes */
+	long long v64;
+	time_t t;
+
+	if(tv != NULL) {
+		t = *tv;
+	} else {
+		t = time(NULL);
+	}
+	v64 = (long long)t;
+	tl = (int)(v64 & 0xFFFFFFFFLL);
+	if(tu != NULL) {
+		/* upper 4 bytes */
+		*tu = (int)((v64 >> 32) & 0xFFFFFFFFLL);
+	}
+
+	return tl;
+}
+
 /* converts a username into uid:gid,
  * returns -1 on error & 0 on success */
 int user2uid(int *uid, int *gid, char *user);
@@ -1177,6 +1282,8 @@ char *get_abs_pathname(str *base, str *file);
  */
 char *str_search(str *text, str *needle);
 
+char *str_search_strz(str *text, char *needlez);
+
 char *stre_search_strz(char *vstart, char *vend, char *needlez);
 
 char *str_casesearch(str *text, str *needle);
@@ -1188,6 +1295,8 @@ char *str_casesearch_strz(str *text, char *needlez);
 char *str_rsearch(str *text, str *needle);
 
 char *str_rcasesearch(str *text, str *needle);
+
+char *str_search_char(str *text, char needle);
 
 /*
  * ser_memmem() returns the location of the first occurrence of data
@@ -1202,5 +1311,7 @@ void *ser_memmem(const void *b1, const void *b2, size_t len1, size_t len2);
  * NULL if none is found.
  */
 void *ser_memrmem(const void *b1, const void *b2, size_t len1, size_t len2);
+
+int ksr_hex_decode_ws(str *shex, str *sraw);
 
 #endif

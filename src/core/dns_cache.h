@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -166,8 +168,9 @@ typedef unsigned long long srv_flags_t;
 
 struct dns_srv_handle
 {
-	struct dns_hash_entry *srv; /**< srv entry */
-	struct dns_hash_entry *a;	/**< a or aaaa current entry */
+	struct dns_hash_entry *naptr; /**< naptr entry */
+	struct dns_hash_entry *srv;	  /**< srv entry */
+	struct dns_hash_entry *a;	  /**< a or aaaa current entry */
 #ifdef DNS_SRV_LB
 	srv_flags_t srv_tried_rrs;
 #endif
@@ -191,29 +194,42 @@ int init_dns_cache_stats(int iproc_num);
 #endif
 void destroy_dns_cache(void);
 
+void dns_hash_put_entry(
+		struct dns_hash_entry *e, const char *fpath, unsigned int line);
+void dns_hash_put_entry_shm_unsafe(
+		struct dns_hash_entry *e, const char *fpath, unsigned int line);
 
-void dns_hash_put(struct dns_hash_entry *e);
-void dns_hash_put_shm_unsafe(struct dns_hash_entry *e);
+#define dns_hash_put(e) dns_hash_put_entry(e, __FILE__, __LINE__)
+#define dns_hash_put_shm_unsafe(e) \
+	dns_hash_put_entry_shm_unsafe(e, __FILE__, __LINE__)
 
-inline static void dns_srv_handle_put(struct dns_srv_handle *h)
+inline static void dns_srv_handle_put_helper(
+		struct dns_srv_handle *h, const char *fpath, unsigned int line)
 {
 	if(h) {
+		if(h->naptr) {
+			dns_hash_put_entry(h->naptr, fpath, line);
+			h->naptr = 0;
+		}
 		if(h->srv) {
-			dns_hash_put(h->srv);
+			dns_hash_put_entry(h->srv, fpath, line);
 			h->srv = 0;
 		}
 		if(h->a) {
-			dns_hash_put(h->a);
+			dns_hash_put_entry(h->a, fpath, line);
 			h->a = 0;
 		}
 	}
 }
 
+#define dns_srv_handle_put(h) dns_srv_handle_put_helper(h, __FILE__, __LINE__)
 
 /** @brief use it when copying, it manually increases the ref cound */
 inline static void dns_srv_handle_ref(struct dns_srv_handle *h)
 {
 	if(h) {
+		if(h->naptr)
+			atomic_inc(&h->naptr->refcnt);
 		if(h->srv)
 			atomic_inc(&h->srv->refcnt);
 		if(h->a)
@@ -236,6 +252,10 @@ inline static void dns_srv_handle_cpy(
 inline static void dns_srv_handle_put_shm_unsafe(struct dns_srv_handle *h)
 {
 	if(h) {
+		if(h->naptr) {
+			dns_hash_put_shm_unsafe(h->naptr);
+			h->naptr = 0;
+		}
 		if(h->srv) {
 			dns_hash_put_shm_unsafe(h->srv);
 			h->srv = 0;
@@ -265,7 +285,7 @@ inline static int dns_srv_handle_next(struct dns_srv_handle *h, int err)
 
 inline static void dns_srv_handle_init(struct dns_srv_handle *h)
 {
-	h->srv = h->a = 0;
+	h->naptr = h->srv = h->a = 0;
 	h->srv_no = h->ip_no = 0;
 	h->port = 0;
 	h->proto = 0;
@@ -274,6 +294,23 @@ inline static void dns_srv_handle_init(struct dns_srv_handle *h)
 #endif
 }
 
+inline static void dns_srv_handle_reset(struct dns_srv_handle *h)
+{
+	/* do NOT put the naptr */
+	if(h->srv) {
+		dns_hash_put(h->srv);
+		h->srv = 0;
+	}
+	if(h->a) {
+		dns_hash_put(h->a);
+		h->a = 0;
+	}
+	h->srv_no = h->ip_no = 0;
+	h->port = 0;
+#ifdef DNS_SRV_LB
+	h->proto = 0;
+#endif
+}
 
 /** @brief performes a srv query on name
  * Params:  name  - srv query target (e.g. _sip._udp.foo.bar)

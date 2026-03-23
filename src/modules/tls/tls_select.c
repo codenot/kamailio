@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -48,6 +50,7 @@
 #include "tls_mod.h"
 #include "tls_init.h" /* features macros */
 #include "tls_cfg.h"
+#include "tls_util.h"
 
 enum
 {
@@ -127,14 +130,14 @@ struct tcp_connection *get_cur_connection(struct sip_msg *msg)
 	if(_tls_pv_con != 0)
 		return _tls_pv_con;
 
-	if(msg->rcv.proto != PROTO_TLS) {
+	if(msg->rcv.proto != PROTO_TLS && msg->rcv.proto != PROTO_WSS) {
 		ERR("Transport protocol is not TLS (bug in config)\n");
 		return 0;
 	}
 
 	c = tcpconn_get(msg->rcv.proto_reserved1, 0, 0, 0,
 			cfg_get(tls, tls_cfg, con_lifetime));
-	if(c && c->type != PROTO_TLS) {
+	if(c && c->type != PROTO_TLS && msg->rcv.proto != PROTO_WSS) {
 		ERR("Connection found but is not TLS\n");
 		tcpconn_put(c);
 		return 0;
@@ -143,7 +146,7 @@ struct tcp_connection *get_cur_connection(struct sip_msg *msg)
 }
 
 
-static SSL *get_ssl(struct tcp_connection *c)
+static struct tls_extra_data *get_extra(struct tcp_connection *c)
 {
 	struct tls_extra_data *extra;
 
@@ -152,14 +155,14 @@ static SSL *get_ssl(struct tcp_connection *c)
 		return 0;
 	}
 	extra = (struct tls_extra_data *)c->extra_data;
-	return extra->ssl;
+	return extra;
 }
 
 
 static int get_cert(
 		X509 **cert, struct tcp_connection **c, struct sip_msg *msg, int my)
 {
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	*cert = 0;
 	*c = get_cur_connection(msg);
@@ -167,10 +170,12 @@ static int get_cert(
 		INFO("TLS connection not found\n");
 		return -1;
 	}
-	ssl = get_ssl(*c);
-	if(!ssl)
+	extra = get_extra(*c);
+	if(!extra)
 		goto err;
-	*cert = my ? SSL_get_certificate(ssl) : SSL_get_peer_certificate(ssl);
+	*cert = my ? x509_DER_to_cert(extra->ssl_my_cert, extra->ssl_my_cert_len)
+			   : x509_DER_to_cert(
+						 extra->ssl_peer_cert, extra->ssl_peer_cert_len);
 	if(!*cert) {
 		if(my) {
 			ERR("Unable to retrieve my TLS certificate from SSL structure\n");
@@ -194,18 +199,18 @@ static int get_cipher(str *res, sip_msg_t *msg)
 	static char buf[1024];
 
 	struct tcp_connection *c;
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	c = get_cur_connection(msg);
 	if(!c) {
 		INFO("TLS connection not found in select_cipher\n");
 		goto err;
 	}
-	ssl = get_ssl(c);
-	if(!ssl)
+	extra = get_extra(c);
+	if(!extra)
 		goto err;
 
-	cipher.s = (char *)SSL_CIPHER_get_name(SSL_get_current_cipher(ssl));
+	cipher.s = extra->ssl_cipher_name;
 	cipher.len = cipher.s ? strlen(cipher.s) : 0;
 	if(cipher.len >= 1024) {
 		ERR("Cipher name too long\n");
@@ -250,18 +255,18 @@ static int get_bits(str *res, long *i, sip_msg_t *msg)
 	static char buf[1024];
 
 	struct tcp_connection *c;
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	c = get_cur_connection(msg);
 	if(!c) {
 		INFO("TLS connection not found in select_bits\n");
 		goto err;
 	}
-	ssl = get_ssl(c);
-	if(!ssl)
+	extra = get_extra(c);
+	if(!extra)
 		goto err;
 
-	b = SSL_CIPHER_get_bits(SSL_get_current_cipher(ssl), 0);
+	b = extra->ssl_cipher_bits;
 	bits.s = int2str(b, &bits.len);
 	if(bits.len >= 1024) {
 		ERR("Bits string too long\n");
@@ -303,18 +308,18 @@ static int get_version(str *res, sip_msg_t *msg)
 	static char buf[1024];
 
 	struct tcp_connection *c;
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	c = get_cur_connection(msg);
 	if(!c) {
 		INFO("TLS connection not found in select_version\n");
 		goto err;
 	}
-	ssl = get_ssl(c);
-	if(!ssl)
+	extra = get_extra(c);
+	if(!extra)
 		goto err;
 
-	version.s = (char *)SSL_get_version(ssl);
+	version.s = extra->ssl_version;
 	version.len = version.s ? strlen(version.s) : 0;
 	if(version.len >= 1024) {
 		ERR("Version string too long\n");
@@ -358,19 +363,19 @@ static int get_desc(str *res, sip_msg_t *msg)
 	static char buf[128];
 
 	struct tcp_connection *c;
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	c = get_cur_connection(msg);
 	if(!c) {
 		INFO("TLS connection not found in select_desc\n");
 		goto err;
 	}
-	ssl = get_ssl(c);
-	if(!ssl)
+	extra = get_extra(c);
+	if(!extra)
 		goto err;
 
 	buf[0] = '\0';
-	SSL_CIPHER_description(SSL_get_current_cipher(ssl), buf, 128);
+	strcpy(buf, extra->ssl_cipher_desc);
 	res->s = buf;
 	res->len = strlen(buf);
 	tcpconn_put(c);
@@ -466,23 +471,21 @@ static int check_cert(str *res, long *ires, int local, int err, sip_msg_t *msg)
 	static str fail = STR_STATIC_INIT("0");
 
 	struct tcp_connection *c;
-	SSL *ssl;
-	X509 *cert = 0;
+	struct tls_extra_data *extra;
 
 	c = get_cur_connection(msg);
 	if(!c)
 		return -1;
 
-	ssl = get_ssl(c);
-	if(!ssl)
+	extra = get_extra(c);
+	if(!extra)
 		goto error;
 
 	if(local) {
 		DBG("Verification of local certificates not supported\n");
 		goto error;
 	} else {
-		if((cert = SSL_get_peer_certificate(ssl))
-				&& SSL_get_verify_result(ssl) == err) {
+		if(extra->ssl_peer_cert && extra->ssl_verify_result == err) {
 			*res = succ;
 			if(ires)
 				*ires = 1;
@@ -493,8 +496,6 @@ static int check_cert(str *res, long *ires, int local, int err, sip_msg_t *msg)
 		}
 	}
 
-	if(cert)
-		X509_free(cert);
 	tcpconn_put(c);
 	return 0;
 
@@ -917,12 +918,12 @@ static int pv_ssl_cert(sip_msg_t *msg, pv_param_t *param, pv_value_t *res)
 }
 
 
-#if(OPENSSL_VERSION_NUMBER >= 0x10100001L)
+#if (OPENSSL_VERSION_NUMBER >= 0x10100001L)
 /* NB: SSL_get0_verified_chain() was introduced in OpenSSL 1.1.0 */
 static int get_verified_cert_chain(
 		STACK_OF(X509) * *chain, struct tcp_connection **c, struct sip_msg *msg)
 {
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	*chain = 0;
 	*c = get_cur_connection(msg);
@@ -930,10 +931,11 @@ static int get_verified_cert_chain(
 		INFO("TLS connection not found\n");
 		return -1;
 	}
-	ssl = get_ssl(*c);
-	if(!ssl)
+	extra = get_extra(*c);
+	if(!extra)
 		goto err;
-	*chain = SSL_get0_verified_chain(ssl);
+	*chain = x509_DER_to_stack((const unsigned char *)extra->ssl_cert_chain,
+			extra->ssl_cert_chain_len);
 	if(!*chain) {
 		ERR("Unable to retrieve peer TLS verified chain from SSL structure\n");
 		goto err;
@@ -1009,6 +1011,20 @@ static int get_comp(str *res, int local, int issuer, int nid, sip_msg_t *msg)
 	if(!name) {
 		ERR("Cannot extract subject or issuer name from peer certificate\n");
 		goto err;
+	}
+
+	if(nid == NID_undef) {
+		/* no component requested - return the full subject/issuer oneline */
+		if(X509_NAME_oneline(name, buf, sizeof(buf)) == NULL) {
+			ERR("Error converting X509 name to string\n");
+			goto err;
+		}
+		res->s = buf;
+		res->len = strlen(buf);
+		if(!local)
+			X509_free(cert);
+		tcpconn_put(c);
+		return 0;
 	}
 
 	index = X509_NAME_get_index_by_NID(name, nid, -1);
@@ -1187,21 +1203,16 @@ static int pv_comp(sip_msg_t *msg, pv_param_t *param, pv_value_t *res)
 
 int pv_parse_alt_name(pv_spec_p sp, str *in)
 {
-	pv_elem_t *fmt = NULL;
-
 	if(in->s == NULL || in->len <= 0)
 		return -1;
-	if(pv_parse_format(in, &fmt) < 0 || fmt == NULL) {
-		LM_ERR("wrong format[%.*s]\n", in->len, in->s);
-		return -1;
-	}
-	if(strncmp(in->s, "DNS", 3) == 0) {
+
+	if(in->len == 3 && strncmp(in->s, "DNS", 3) == 0) {
 		sp->pvp.pvn.u.isname.name.n = PV_COMP_HOST;
-	} else if(strncmp(in->s, "URI", 3) == 0) {
+	} else if(in->len == 3 && strncmp(in->s, "URI", 3) == 0) {
 		sp->pvp.pvn.u.isname.name.n = PV_COMP_URI;
-	} else if(strncmp(in->s, "EMAIL", 5) == 0) {
+	} else if(in->len == 5 && strncmp(in->s, "EMAIL", 5) == 0) {
 		sp->pvp.pvn.u.isname.name.n = PV_COMP_E;
-	} else if(strncmp(in->s, "IP", 2) == 0) {
+	} else if(in->len == 2 && strncmp(in->s, "IP", 2) == 0) {
 		sp->pvp.pvn.u.isname.name.n = PV_COMP_IP;
 	} else {
 		LM_ERR("Unsupported alt name %s\n", in->s);
@@ -1418,8 +1429,6 @@ static int get_alt_count(long *res, int local, int type, sip_msg_t *msg)
 	tcpconn_put(c);
 	return 0;
 err:
-	if(names)
-		sk_GENERAL_NAME_pop_free(names, GENERAL_NAME_free);
 	if(!local)
 		X509_free(cert);
 	tcpconn_put(c);
@@ -1555,20 +1564,20 @@ static int get_tlsext_sn(str *res, sip_msg_t *msg)
 	static char buf[1024];
 	struct tcp_connection *c;
 	str server_name;
-	SSL *ssl;
+	struct tls_extra_data *extra;
 
 	c = get_cur_connection(msg);
 	if(!c) {
 		INFO("TLS connection not found in select_desc\n");
 		goto error;
 	}
-	ssl = get_ssl(c);
-	if(!ssl)
+	extra = get_extra(c);
+	if(!extra)
 		goto error;
 
 	buf[0] = '\0';
 
-	server_name.s = (char *)SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+	server_name.s = extra->ssl_servername;
 	if(server_name.s) {
 		server_name.len = strlen(server_name.s);
 		DBG("received server_name (TLS extension): '%.*s'\n",
@@ -1664,7 +1673,7 @@ error:
 
 int pv_get_tls(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 {
-	SSL *ssl = NULL;
+	struct tls_extra_data *extra = NULL;
 	tcp_connection_t *c = NULL;
 	X509 *cert = NULL;
 	str sv = STR_NULL;
@@ -1678,12 +1687,15 @@ int pv_get_tls(struct sip_msg *msg, pv_param_t *param, pv_value_t *res)
 		LM_DBG("TLS connection not found\n");
 		return pv_get_null(msg, param, res);
 	}
-	ssl = get_ssl(c);
-	if(ssl == NULL) {
+	extra = get_extra(c);
+	if(extra == NULL) {
 		goto error;
 	}
-	cert = (param->pvn.u.isname.name.n < 5000) ? SSL_get_certificate(ssl)
-											   : SSL_get_peer_certificate(ssl);
+	cert = (param->pvn.u.isname.name.n < 5000)
+				   ? x509_DER_to_cert(
+							 extra->ssl_my_cert, extra->ssl_my_cert_len)
+				   : x509_DER_to_cert(
+							 extra->ssl_peer_cert, extra->ssl_peer_cert_len);
 	if(cert == NULL) {
 		if(param->pvn.u.isname.name.n < 5000) {
 			LM_ERR("failed to retrieve my TLS certificate from SSL "
@@ -1782,7 +1794,7 @@ select_row_t tls_sel[] = {
 		{sel_cert, SEL_PARAM_STR, STR_STATIC_INIT("urlencoded_cert"),
 				sel_ssl_cert, DIVERSION | CERT_URLENCODED},
 
-#if(OPENSSL_VERSION_NUMBER >= 0x10100001L)
+#if (OPENSSL_VERSION_NUMBER >= 0x10100001L)
 		{sel_cert, SEL_PARAM_STR, STR_STATIC_INIT("verified_cert_chain"),
 				sel_ssl_verified_cert_chain, CONSUME_NEXT_INT},
 #endif

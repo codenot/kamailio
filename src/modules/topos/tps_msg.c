@@ -53,6 +53,7 @@ extern int _tps_contact_mode;
 extern str _tps_cparam_name;
 extern int _tps_rr_update;
 extern int _tps_header_mode;
+extern unsigned int _tps_methods_update_time;
 
 extern str _tps_context_param;
 extern str _tps_context_value;
@@ -254,7 +255,7 @@ char *tps_msg_update(sip_msg_t *msg, unsigned int *olen)
 	init_dest_info(&dst);
 	dst.proto = PROTO_UDP;
 	return build_req_buf_from_sip_req(
-			msg, olen, &dst, BUILD_NO_LOCAL_VIA | BUILD_NO_VIA1_UPDATE);
+			msg, olen, &dst, BUILD_NO_LOCAL_VIA | BUILD_NO_VIA1_UPDATE, NULL);
 }
 
 /**
@@ -331,8 +332,13 @@ int tps_dlg_message_update(sip_msg_t *msg, tps_data_t *ptsd, int ctmode)
 			return 1;
 		}
 		/* find the r-uri parameter */
-		ret = tps_get_param_value(
-				&msg->parsed_uri.params, &_tps_cparam_name, &tuuid);
+		if(msg->parsed_uri.sip_params.len > 0) {
+			ret = tps_get_param_value(
+					&msg->parsed_uri.sip_params, &_tps_cparam_name, &tuuid);
+		} else {
+			ret = tps_get_param_value(
+					&msg->parsed_uri.params, &_tps_cparam_name, &tuuid);
+		}
 		if(ret < 0) {
 			LM_ERR("failed to parse param\n");
 			return -1;
@@ -1008,7 +1014,7 @@ int tps_request_received(sip_msg_t *msg, int dialog)
 				goto error;
 			}
 		}
-		if(metid & METHOD_SUBSCRIBE) {
+		if(metid & _tps_methods_update_time) {
 			if(tps_storage_update_dialog(
 					   msg, &mtsd, &stsd, TPS_DBU_CONTACT | TPS_DBU_TIME)
 					< 0) {
@@ -1080,6 +1086,14 @@ int tps_response_received(sip_msg_t *msg)
 	tps_reappend_rr(msg, &btsd, &btsd.s_rr);
 	tps_reappend_rr(msg, &btsd, &btsd.x_rr);
 	tps_append_xbranch(msg, &mtsd.x_vbranch1);
+
+	if(msg->first_line.u.reply.statuscode > 299
+			&& (get_cseq(msg)->method_id
+					& (METHOD_INVITE | METHOD_SUBSCRIBE))) {
+		LM_DBG("%d reply end dialog storage\n",
+				msg->first_line.u.reply.statuscode);
+		tps_storage_end_dialog(msg, &mtsd, &stsd);
+	}
 
 	return 0;
 

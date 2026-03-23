@@ -17,25 +17,22 @@ PI_FRAMEWORK_TABLE_XSL = $(STYLESHEETS)/pi_framework_table.xsl
 PI_FRAMEWORK_MOD_XSL = $(STYLESHEETS)/pi_framework_mod.xsl
 
 # Stylesheet used to generate MySQL database schema
-MYSQL_XSL = $(STYLESHEETS)/mysql.xsl
+MYSQL_XSL = $(STYLESHEETS)/db_mysql.xsl
 
 # Stylesheet used to generate Postgres database schema
-POSTGRES_XSL = $(STYLESHEETS)/postgres.xsl
+POSTGRES_XSL = $(STYLESHEETS)/db_postgres.xsl
 
 # Stylesheet used to generate dbtext database schema
-DBTEXT_XSL = $(STYLESHEETS)/dbtext.xsl
-
-# Stylesheet used to generate berkeley database schema
-DB_BERKELEY_XSL = $(STYLESHEETS)/db_berkeley.xsl
+DBTEXT_XSL = $(STYLESHEETS)/db_text.xsl
 
 # Stylesheet used to generate sqlite database schema
 DB_SQLITE_XSL = $(STYLESHEETS)/db_sqlite.xsl
 
 # Stylesheet used to generate oracle database schema
-ORACLE_XSL = $(STYLESHEETS)/oracle.xsl
+ORACLE_XSL = $(STYLESHEETS)/db_oracle.xsl
 
 # Stylesheet used to generate mongodb database schema
-MONGODB_XSL = $(STYLESHEETS)/mongodb.xsl
+MONGODB_XSL = $(STYLESHEETS)/db_mongodb.xsl
 
 # Stylesheet used to generate Redis database schema
 DB_REDIS_XSL = $(STYLESHEETS)/db_redis.xsl
@@ -72,7 +69,7 @@ ifeq ($(VERBOSE), 1)
 	override XSLTPROC := $(XSLTPROC) --verbose
 endif
 
-all: mysql postgres dbtext db_berkeley db_sqlite oracle mongodb db_redis pi_framework
+all: mysql postgres dbtext db_sqlite oracle mongodb db_redis pi_framework
 
 .PHONY: pi_framework pi_framework_clean
 pi_framework:
@@ -105,7 +102,7 @@ mysql:
 		XML_CATALOG_FILES=$(CATALOG) $(XSLTPROC) $(XSLTPROC_FLAGS) \
 		--stringparam dir "$(SCHEME)/mysql" \
 		--stringparam prefix "$$FILE-" \
-		--stringparam db "mysql" \
+		--stringparam db "db_mysql" \
 		$(MYSQL_XSL) kamailio-"$$FILE".xml ; \
 	done
 
@@ -118,7 +115,7 @@ postgres:
 		XML_CATALOG_FILES=$(CATALOG) $(XSLTPROC) $(XSLTPROC_FLAGS) \
 		--stringparam dir "$(SCHEME)/postgres" \
 		--stringparam prefix "$$FILE-" \
-		--stringparam db "postgres" \
+		--stringparam db "db_postgres" \
 		$(POSTGRES_XSL) kamailio-"$$FILE".xml ; \
 	done
 
@@ -131,7 +128,7 @@ oracle:
 		XML_CATALOG_FILES=$(CATALOG) $(XSLTPROC) $(XSLTPROC_FLAGS) \
 		--stringparam dir "$(SCHEME)/oracle" \
 		--stringparam prefix "$$FILE-" \
-		--stringparam db "oracle" \
+		--stringparam db "db_oracle" \
 		$(ORACLE_XSL) kamailio-"$$FILE".xml ; \
 	done
 
@@ -144,7 +141,7 @@ dbtext:
 		XML_CATALOG_FILES=$(CATALOG) $(XSLTPROC) $(XSLTPROC_FLAGS) \
 		--stringparam dir "$(SCHEME)/dbtext/kamailio" \
 		--stringparam prefix "" \
-		--stringparam db "dbtext" \
+		--stringparam db "db_text" \
 		$(DBTEXT_XSL) kamailio-"$$FILE".xml ; \
 	done
 	TMPFILE=`mktemp -t kamailio-test.XXXXXXXXXX`
@@ -162,32 +159,6 @@ dbtext:
 
 dbtext_clean:
 	-@rm -f $(SCHEME)/dbtext/kamailio/*
-
-.PHONY: db_berkeley db_berkeley_clean
-db_berkeley:
-	for FILE in $(TABLES); do \
-		XML_CATALOG_FILES=$(CATALOG) $(XSLTPROC) $(XSLTPROC_FLAGS) \
-		--stringparam dir "$(SCHEME)/db_berkeley/kamailio" \
-		--stringparam prefix "" \
-		--stringparam db "db_berkeley" \
-		$(DB_BERKELEY_XSL) kamailio-"$$FILE".xml ; \
-	done
-	TMPFILE=`mktemp -t kamailio-test.XXXXXXXXXX`
-	# small hack to create the version table entries, this is here easier as with XSL
-	for FILE in $(sort $(wildcard $(SCHEME)/db_berkeley/kamailio/*)) ; do \
-		if [ -f "$$FILE" ]; then \
-			if [  "$$FILE" != "$(SCHEME)/db_berkeley/kamailio/version" ]; then \
-				tail -n 2 "$$FILE" >> "$(SCHEME)/db_berkeley/kamailio/version" ; \
- 				head -n 10 "$$FILE" > $TMPFILE ; \
-				cp $TMPFILE "$$FILE" ; \
-			fi ; \
-		fi ; \
-	done ; \
-	rm -f $TMPFILE
-
-db_berkeley_clean:
-	-@rm -f $(SCHEME)/db_berkeley/kamailio/*
-
 
 .PHONY: db_sqlite db_sqlite_clean
 db_sqlite:
@@ -208,7 +179,7 @@ mongodb:
 		XML_CATALOG_FILES=$(CATALOG) $(XSLTPROC) $(XSLTPROC_FLAGS) \
 		--stringparam dir "$(SCHEME)/mongodb/kamailio" \
 		--stringparam prefix "" \
-		--stringparam db "mongodb" \
+		--stringparam db "db_mongodb" \
 		$(MONGODB_XSL) kamailio-"$$FILE".xml ; \
 	done
 	@# small hack to create the version table entries, this is here easier as with XSL
@@ -365,4 +336,4 @@ dbdoc_clean:
 	done
 
 .PHONY: clean
-clean: mysql_clean postgres_clean oracle_clean dbtext_clean db_berkeley_clean db_sqlite_clean mongodb_clean db_redis_clean pi_framework_clean docbook_clean # modules_clean dbdoc_clean
+clean: mysql_clean postgres_clean oracle_clean dbtext_clean db_sqlite_clean mongodb_clean db_redis_clean pi_framework_clean docbook_clean # modules_clean dbdoc_clean

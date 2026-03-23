@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -36,6 +38,9 @@
 
 #define GET_TO_PURI(p_msg) \
 	(&((struct to_body *)(p_msg)->to->parsed)->parsed_uri)
+
+char *parse_to_body(
+		char *const buffer, const char *const end, struct hdr_field *const hdr);
 
 /*! \brief
  * To header field parser

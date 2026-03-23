@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -435,13 +437,13 @@ int load_dialog_info_from_db(
 
 			dlg->tl.timeout = (unsigned int)(VAL_INT(values + 9));
 			LM_DBG("db dialog timeout is %u (%u/%u)\n", dlg->tl.timeout,
-					get_ticks(), (unsigned int)time(0));
-			if(dlg->tl.timeout <= (unsigned int)time(0)) {
+					get_ticks(), ksr_time_uint(NULL, NULL));
+			if(dlg->tl.timeout <= ksr_time_uint(NULL, NULL)) {
 				dlg->tl.timeout = 0;
 				dlg->lifetime = 0;
 			} else {
 				dlg->lifetime = dlg->tl.timeout - dlg->start_ts;
-				dlg->tl.timeout -= (unsigned int)time(0);
+				dlg->tl.timeout -= ksr_time_uint(NULL, NULL);
 			}
 
 			GET_STR_VALUE(cseq1, values, 10, 1, 1);
@@ -490,7 +492,7 @@ int load_dialog_info_from_db(
 
 			if(dlg->state == DLG_STATE_DELETED) {
 				/* end_ts used for force clean up not stored - set it to now */
-				dlg->end_ts = (unsigned int)time(0);
+				dlg->end_ts = ksr_time_uint(NULL, NULL);
 			}
 			/*restore the timer values */
 			if(0 != insert_dlg_timer(&(dlg->tl), (int)dlg->tl.timeout)) {
@@ -896,7 +898,7 @@ int update_dialog_dbinfo_unsafe(struct dlg_cell *cell)
 		VAL_INT(values + 1) = cell->h_id;
 		VAL_INT(values + 9) = cell->start_ts;
 		VAL_INT(values + 10) = cell->state;
-		VAL_INT(values + 11) = (unsigned int)((unsigned int)time(0)
+		VAL_INT(values + 11) = (unsigned int)(ksr_time_uint(NULL, NULL)
 											  + cell->tl.timeout - get_ticks());
 
 		SET_STR_VALUE(values + 2, cell->callid);
@@ -978,7 +980,7 @@ int update_dialog_dbinfo_unsafe(struct dlg_cell *cell)
 		VAL_INT(values) = cell->h_entry;
 		VAL_INT(values + 1) = cell->h_id;
 		VAL_INT(values + 10) = cell->state;
-		VAL_INT(values + 11) = (unsigned int)((unsigned int)time(0)
+		VAL_INT(values + 11) = (unsigned int)(ksr_time_uint(NULL, NULL)
 											  + cell->tl.timeout - get_ticks());
 
 		SET_STR_VALUE(values + 12, cell->cseq[DLG_CALLER_LEG]);
@@ -1007,8 +1009,39 @@ int update_dialog_dbinfo_unsafe(struct dlg_cell *cell)
 		jdoc.free_fn(jdoc.buf.s);
 		jdoc.buf.s = NULL;
 	}
-	srjson_DestroyDoc(&jdoc);
+	/* Handle sflags updates separately after main dialog updates
+	 * This ensures sflags changes are persisted to database when
+	 * dlg_setflag() or dlg_resetflag() are called */
+	if((cell->dflags & DLG_FLAG_CHANGED_SFLAGS) != 0) {
+		LM_DBG("updating sflags for dialog [%d:%d], sflags=%u\n", cell->h_entry,
+				cell->h_id, cell->sflags);
 
+		if(use_dialog_table() != 0) {
+			goto error;
+		}
+
+		VAL_TYPE(values) = VAL_TYPE(values + 1) = DB1_INT;
+		VAL_TYPE(values + 18) = DB1_INT;
+
+		VAL_NULL(values) = VAL_NULL(values + 1) = VAL_NULL(values + 18) = 0;
+		VAL_INT(values) = cell->h_entry;
+		VAL_INT(values + 1) = cell->h_id;
+		VAL_INT(values + 18) = cell->sflags;
+
+		if((dialog_dbf.update(dialog_db_handle, (insert_keys), 0, (values),
+				   (insert_keys + 18), (values + 18), 2, 1))
+				!= 0) {
+			LM_ERR("could not update sflags in database for dialog [%d:%d]\n",
+					cell->h_entry, cell->h_id);
+			goto error;
+		}
+
+		LM_DBG("sflags successfully updated in database for dialog [%d:%d]\n",
+				cell->h_entry, cell->h_id);
+		cell->dflags &= ~(DLG_FLAG_CHANGED_SFLAGS);
+	}
+
+	srjson_DestroyDoc(&jdoc);
 	return 0;
 
 error:

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -828,6 +830,9 @@ int jsonrpc_tcp_process(void)
 	LM_DBG("waiting for client connections\n");
 	while(1) {
 		cfg_update();
+		if(csock >= 0) {
+			close(csock);
+		}
 		csock = accept(
 				_jsonrpc_tcp_address.tsock, (struct sockaddr *)&caddr, &clen);
 
@@ -843,12 +848,10 @@ int jsonrpc_tcp_process(void)
 		n = read(csock, jsonrpc_tcp_buf, JSONRPC_DGRAM_BUF_SIZE - 1);
 		if(n < 0) {
 			LM_ERR("failed reading from tcp socket\n");
-			close(csock);
 			continue;
 		}
 		if(n == 0) {
 			LM_DBG("no data received\n");
-			close(csock);
 			continue;
 		}
 		LM_DBG("data received - size: %d\n", n);
@@ -890,7 +893,6 @@ int jsonrpc_tcp_process(void)
 			if(n < 0) {
 				LM_ERR("failed to send the response\n");
 			}
-			close(csock);
 			continue;
 		}
 
@@ -898,7 +900,6 @@ int jsonrpc_tcp_process(void)
 		if(n < 0) {
 			LM_ERR("failed to send the response\n");
 		}
-		close(csock);
 	}
 
 	return 0;

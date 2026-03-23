@@ -33,7 +33,10 @@
 // WOLFFIX
 #define GET_CIPHER_VERSION(s) \
 	wolfSSL_CIPHER_get_version(wolfSSL_get_current_cipher(s))
-
+/* for v5.5.4-stable */
+#ifndef X509_V_ERR_UNSPECIFIED
+#define X509_V_ERR_UNSPECIFIED 1
+#endif
 
 #include "../../core/dprint.h"
 #include "../../core/ip_addr.h"
@@ -43,6 +46,7 @@
 #include "../../core/globals.h"
 #include "../../core/tcp_int_send.h"
 #include "../../core/tcp_read.h"
+#include "../../core/tcp_mtops.h"
 #include "../../core/cfg/cfg.h"
 #include "../../core/route.h"
 #include "../../core/forward.h"
@@ -127,6 +131,95 @@ int tls_run_event_routes(struct tcp_connection *c);
 extern str sr_tls_xavp_cfg;
 
 static str _ksr_tls_connect_server_id = STR_NULL;
+
+static void tls_init_ssl_cache(struct tls_extra_data *tls_c)
+{
+	tls_c->ssl_servername = NULL;
+	tls_c->ssl_cipher_name = NULL;
+	tls_c->ssl_my_cert = NULL;
+	tls_c->ssl_peer_cert = NULL;
+	tls_c->ssl_cert_chain = NULL;
+	tls_c->ssl_verify_result = X509_V_ERR_UNSPECIFIED;
+	tls_c->ssl_cipher_bits = 0;
+	tls_c->ssl_version[0] = '\0';
+	tls_c->ssl_cipher_desc[0] = '\0';
+}
+
+static void tls_build_ssl_cache(
+		struct tls_extra_data *tls_c, WOLFSSL_X509 *cert)
+{
+	WOLFSSL *ssl = tls_c->ssl;
+	const char *sni;
+	const WOLFSSL_CIPHER *cipher;
+	const char *cipher_name;
+	WOLFSSL_X509 *my_cert;
+	int alg_bits;
+	STACK_OF(WOLFSSL_X509) * chain;
+	WOLFSSL_X509 *peer_cert = NULL;
+
+	tls_c->ssl_verify_result = wolfSSL_get_verify_result(ssl);
+
+	/* if no cert passed in, try to get it ourselves — owns the ref */
+	if(cert != NULL) {
+		/* caller passed it in — dup so we own it independently */
+		peer_cert = wolfSSL_X509_dup(cert);
+	} else {
+		/* SSL_get_peer_certificate() increments ref — we own it */
+		peer_cert = wolfSSL_get_peer_certificate(ssl);
+	}
+
+	if(peer_cert != NULL) {
+		tls_c->ssl_peer_cert =
+				cert_to_x509_DER(peer_cert, &tls_c->ssl_peer_cert_len);
+		X509_free(peer_cert); /* release our ref */
+	}
+
+	sni = wolfSSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+	if(sni != NULL) {
+		tls_c->ssl_servername = shm_malloc(strlen(sni) + 1);
+		strcpy(tls_c->ssl_servername, sni);
+	}
+
+	strcpy(tls_c->ssl_cipher_desc, "unknown");
+	cipher = wolfSSL_get_current_cipher(ssl);
+	if(cipher) {
+		wolfSSL_CIPHER_description(
+				cipher, tls_c->ssl_cipher_desc, sizeof(tls_c->ssl_cipher_desc));
+		cipher_name = wolfSSL_CIPHER_get_name(cipher);
+		if(cipher_name) {
+			tls_c->ssl_cipher_name = shm_malloc(strlen(cipher_name) + 1);
+			strcpy(tls_c->ssl_cipher_name, cipher_name);
+		}
+		tls_c->ssl_cipher_bits = wolfSSL_CIPHER_get_bits(cipher, &alg_bits);
+	}
+
+	my_cert = wolfSSL_get_certificate(ssl);
+	if(my_cert) {
+		tls_c->ssl_my_cert = cert_to_x509_DER(my_cert, &tls_c->ssl_my_cert_len);
+	}
+
+	strcpy(tls_c->ssl_version, wolfSSL_get_version(ssl));
+
+	chain = wolfSSL_get0_verified_chain(ssl);
+	if(chain) {
+		tls_c->ssl_cert_chain =
+				stack_to_x509_DER(chain, &tls_c->ssl_cert_chain_len);
+	}
+}
+
+static void tls_free_ssl_cache(struct tls_extra_data *data)
+{
+	if(data->ssl_servername)
+		shm_free(data->ssl_servername);
+	if(data->ssl_cipher_name)
+		shm_free(data->ssl_cipher_name);
+	if(data->ssl_my_cert)
+		shm_free(data->ssl_my_cert);
+	if(data->ssl_peer_cert)
+		shm_free(data->ssl_peer_cert);
+	if(data->ssl_cert_chain)
+		shm_free(data->ssl_cert_chain);
+}
 
 int ksr_tls_set_connect_server_id(str *srvid)
 {
@@ -218,6 +311,8 @@ static str *tls_get_connect_server_name(void)
 static int tls_complete_init(struct tcp_connection *c)
 {
 	tls_domain_t *dom;
+	char *dom_str;
+	size_t dom_str_size;
 	struct tls_extra_data *data = 0;
 	tls_domains_cfg_t *cfg;
 	enum tls_conn_states state;
@@ -262,7 +357,11 @@ static int tls_complete_init(struct tcp_connection *c)
 	DBG("Using initial TLS domain %s (dom %p ctx %p sn [%s])\n",
 			tls_domain_str(dom), dom, dom->ctx[0], ZSW(dom->server_name.s));
 
-	data = (struct tls_extra_data *)shm_malloc(sizeof(struct tls_extra_data));
+	dom_str = tls_domain_str(dom);
+	dom_str_size = strlen(dom_str) + 1;
+
+	data = (struct tls_extra_data *)shm_malloc(
+			sizeof(struct tls_extra_data) + dom_str_size);
 	if(!data) {
 		ERR("Not enough shared memory left\n");
 		goto error;
@@ -274,11 +373,15 @@ static int tls_complete_init(struct tcp_connection *c)
 	data->rwbio = rw_bio;
 	data->cfg = cfg;
 	data->state = state;
+	data->dom.s = (char *)data + sizeof(struct tls_extra_data);
+	data->dom.len = dom_str_size - 1;
+	memcpy(data->dom.s, dom_str, dom_str_size);
 
 	if(unlikely(data->ssl == 0 || data->rwbio == 0)) {
 		TLS_ERR_SSL("Failed to create SSL or BIO structure:", data->ssl);
 		if(data->ssl)
 			wolfSSL_free(data->ssl);
+		tls_free_ssl_cache(data);
 		if(data->rwbio)
 			wolfSSL_BIO_free(data->rwbio);
 		goto error;
@@ -289,6 +392,7 @@ static int tls_complete_init(struct tcp_connection *c)
 		if(!wolfSSL_set_tlsext_host_name(data->ssl, sname->s)) {
 			if(data->ssl)
 				wolfSSL_free(data->ssl);
+			tls_free_ssl_cache(data);
 			if(data->rwbio)
 				wolfSSL_BIO_free(data->rwbio);
 			goto error;
@@ -406,6 +510,7 @@ int tls_accept(struct tcp_connection *c, int *error)
 		goto err;
 	}
 	ret = wolfSSL_accept(ssl);
+	tls_init_ssl_cache(tls_c);
 	if(unlikely(ret == 1)) {
 		DBG("TLS accept successful\n");
 		tls_c->state = S_TLS_ESTABLISHED;
@@ -417,6 +522,7 @@ int tls_accept(struct tcp_connection *c, int *error)
 		LOG(tls_log, "tls_accept: local socket: %s:%d\n",
 				ip_addr2a(&c->rcv.dst_ip), c->rcv.dst_port);
 		cert = wolfSSL_get_peer_certificate(ssl);
+		tls_build_ssl_cache(tls_c, cert);
 		if(cert != 0) {
 			tls_dump_cert_info("tls_accept: client certificate", cert);
 			if(wolfSSL_get_verify_result(ssl) != X509_V_OK) {
@@ -469,6 +575,7 @@ int tls_connect(struct tcp_connection *c, int *error)
 		goto err;
 	}
 	ret = wolfSSL_connect(ssl);
+	tls_init_ssl_cache(tls_c);
 	if(unlikely(ret == 1)) {
 		DBG("TLS connect successful\n");
 		tls_c->state = S_TLS_ESTABLISHED;
@@ -480,6 +587,7 @@ int tls_connect(struct tcp_connection *c, int *error)
 		LOG(tls_log, "tls_connect: sending socket: %s:%d \n",
 				ip_addr2a(&c->rcv.dst_ip), c->rcv.dst_port);
 		cert = wolfSSL_get_peer_certificate(ssl);
+		tls_build_ssl_cache(tls_c, cert);
 		if(cert != 0) {
 			tls_dump_cert_info("tls_connect: server certificate", cert);
 			if(wolfSSL_get_verify_result(ssl) != X509_V_OK) {
@@ -608,7 +716,7 @@ int tls_h_tcpconn_init_f(struct tcp_connection *c, int sock)
 
 /** clean the extra data upon connection shut down.
  */
-void tls_h_tcpconn_clean_f(struct tcp_connection *c)
+void tls_h_tcpconn_clean_direct(struct tcp_connection *c)
 {
 	struct tls_extra_data *extra;
 	/*
@@ -621,6 +729,7 @@ void tls_h_tcpconn_clean_f(struct tcp_connection *c)
 	if(c->extra_data) {
 		extra = (struct tls_extra_data *)c->extra_data;
 		wolfSSL_free(extra->ssl);
+		tls_free_ssl_cache(extra);
 		wolfSSL_BIO_free_all(extra->rwbio);
 		atomic_dec(&extra->cfg->ref_count);
 		if(extra->ct_wq)
@@ -628,6 +737,87 @@ void tls_h_tcpconn_clean_f(struct tcp_connection *c)
 		shm_free(c->extra_data);
 		c->extra_data = 0;
 	}
+}
+
+
+typedef struct tls_clean_params
+{
+	struct tcp_connection *c;
+	int pidx;
+} tls_clean_params_t;
+
+
+static void tls_h_tcpconn_clean_mt_thread_cb(void *p, int pidx)
+{
+	tls_clean_params_t *cparams = NULL;
+	tcpx_task_result_t *rtask = NULL;
+
+	cparams = (tls_clean_params_t *)p;
+
+	rtask = (tcpx_task_result_t *)shm_mallocxz(sizeof(tcpx_task_result_t));
+	if(rtask == NULL) {
+		SHM_MEM_ERROR;
+		ksr_tcpx_thread_eresult(NULL, pidx);
+		return;
+	}
+	tls_h_tcpconn_clean_direct(cparams->c);
+	rtask->code = 0;
+	rtask->data = cparams;
+	ksr_tcpx_thread_eresult(rtask, pidx);
+	return;
+}
+
+
+void tls_h_tcpconn_clean_f(struct tcp_connection *c)
+{
+	/* At shutdown in MT mode, PROC_TCP_MAIN is already dead and the OS
+         * reclaims all memory. Avoid touching its heap entirely. */
+	if(_ksr_is_main && ksr_tcp_main_threads != 0)
+		return;
+
+	if(ksr_tcp_main_threads != 0 && !is_tcp_main() && !_ksr_is_main) {
+		int dsize = 0;
+		tcpx_task_t *ptask = NULL;
+		tcpx_task_result_t *rtask = NULL;
+		tls_clean_params_t *cparams = NULL;
+
+		LM_DBG("dispatching tls clean to tcp main thread for conn %p\n", c);
+
+		dsize = sizeof(tcpx_task_t) + sizeof(tls_clean_params_t);
+		ptask = (tcpx_task_t *)shm_mallocxz(dsize);
+		if(ptask == NULL) {
+			SHM_MEM_ERROR;
+			LM_ERR("falling back to direct tls clean for conn %p\n", c);
+			goto direct_clean;
+		}
+		ptask->exec = tls_h_tcpconn_clean_mt_thread_cb;
+		ptask->param = (void *)((char *)ptask + sizeof(tcpx_task_t));
+		cparams = (tls_clean_params_t *)((char *)ptask + sizeof(tcpx_task_t));
+		cparams->c = c;
+		cparams->pidx = process_no;
+
+		if(ksr_tcpx_task_send(ptask, process_no) < 0) {
+			LM_ERR("failed to send tls clean task, falling back direct\n");
+			shm_free(ptask);
+			goto direct_clean;
+		}
+
+		ksr_tcpx_task_result_recv(&rtask, process_no);
+		if(rtask == NULL) {
+			LM_ERR("failed to receive tls clean result for conn %p\n", c);
+		} else {
+			shm_free(rtask);
+		}
+		shm_free(ptask);
+		return;
+	}
+
+direct_clean:
+	if(!is_tcp_main() && !_ksr_is_main) {
+		LM_WARN("not in supervisor or tcp main process [%s]\n",
+				pt[process_no].desc);
+	}
+	tls_h_tcpconn_clean_direct(c);
 }
 
 
@@ -678,14 +868,101 @@ void tls_h_tcpconn_close_f(struct tcp_connection *c, int fd)
 					break;
 				nr += npos;
 			}
-			assert(nr == wr_used);
-			_tcpconn_write_nb(fd, c, (char *)wr_buf, wr_used);
+			if(nr == wr_used) {
+				_tcpconn_write_nb(fd, c, (char *)wr_buf, wr_used);
+			} else {
+				LM_ERR("skip tcp con write - nr(%lu) != wr_used(%lu)\n",
+						(unsigned long)nr, (unsigned long)wr_used);
+			}
 		}
 		/* we don't bother reading anything (we don't want to wait
            on close) */
 
 		lock_release(&c->write_lock);
 	}
+}
+
+
+static char *get_tls_domain_str(
+		struct tcp_connection *c, struct ip_addr *ip, unsigned short port)
+{
+	tls_domain_t *dom;
+	char *dom_str;
+	tls_domains_cfg_t *cfg;
+	str *sname = NULL;
+	str *srvid = NULL;
+
+	lock_get(tls_domains_cfg_lock);
+	cfg = *tls_domains_cfg;
+	atomic_inc(&cfg->ref_count);
+	lock_release(tls_domains_cfg_lock);
+
+	if(c->flags & F_CONN_PASSIVE) {
+		dom = tls_lookup_cfg(cfg, TLS_DOMAIN_SRV, ip, port, 0, 0);
+	} else {
+		sname = tls_get_connect_server_name();
+		srvid = tls_get_connect_server_id();
+		dom = tls_lookup_cfg(cfg, TLS_DOMAIN_CLI, ip, port, sname, srvid);
+	}
+
+	dom_str = tls_domain_str(dom);
+	atomic_dec(&cfg->ref_count);
+
+	return dom_str;
+}
+
+
+int tls_h_match_domain_f(
+		struct tcp_connection *c, struct ip_addr *ip, unsigned short port)
+{
+	struct tls_extra_data *tls_c;
+	char *dom_str;
+	str dom;
+
+	if(c->type != PROTO_TLS) {
+		LM_ERR("Connection is not TLS\n");
+		return 0;
+	}
+
+	tls_c = (struct tls_extra_data *)c->extra_data;
+
+	if(!c->extra_data) {
+		LM_ERR("called before tls_complete_init()\n");
+		return 0;
+	}
+
+	dom_str = get_tls_domain_str(c, ip, port);
+	STR_SET(dom, dom_str);
+
+	return STR_EQ(tls_c->dom, dom);
+}
+
+
+int tls_h_match_connections_domain_f(
+		struct tcp_connection *l_c, struct tcp_connection *r_c)
+{
+	struct tls_extra_data *l_tls_c, *r_tls_c;
+	char *l_dom_str;
+	str l_dom;
+
+	l_tls_c = (struct tls_extra_data *)l_c->extra_data;
+	r_tls_c = (struct tls_extra_data *)r_c->extra_data;
+
+	if(!r_tls_c)
+		return 1; //consider connection wihout extra_data as matched to keep old behavior
+
+	if(l_tls_c)
+		return STR_EQ(l_tls_c->dom, r_tls_c->dom);
+
+	if(l_c->type != PROTO_TLS) {
+		LM_ERR("Connection is not TLS\n");
+		return 0;
+	}
+
+	l_dom_str = get_tls_domain_str(l_c, &l_c->rcv.dst_ip, l_c->rcv.dst_port);
+	STR_SET(l_dom, l_dom_str);
+
+	return STR_EQ(l_dom, r_tls_c->dom);
 }
 
 
@@ -719,15 +996,14 @@ typedef int (*tcp_low_level_send_t)(int fd, struct tcp_connection *c, char *buf,
  *                     the message.
  * @return *plen on success (>=0), < 0 on error.
  */
-int tls_h_encode_f(struct tcp_connection *c, const char **pbuf,
+int tls_h_encode_helper_f(struct tcp_connection *c, const char **pbuf,
 		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
-		snd_flags_t *send_flags)
+		snd_flags_t *send_flags, unsigned char *wr_buf)
 {
 	int n, offs;
 	WOLFSSL *ssl = NULL;
 	WOLFSSL_BIO *rwbio;
 	struct tls_extra_data *tls_c;
-	static unsigned char wr_buf[TLS_WR_MBUF_SZ];
 	size_t wr_used = 0, nr, npos;
 
 	int ssl_error;
@@ -925,7 +1201,11 @@ end:
 			break;
 		nr += npos;
 	}
-	assert(nr == wr_used);
+	if(unlikely(nr != wr_used)) {
+		LM_ERR("failure - nr(%lu) != wr_used(%lu)\n", (unsigned long)nr,
+				(unsigned long)wr_used);
+		goto error;
+	}
 	*plen = wr_used;
 	*pbuf = (const char *)wr_buf;
 	TLS_WR_TRACE("(%p) end (offs %d, rest_buf=%p rest_len=%d 0x%0x) => %d \n",
@@ -949,12 +1229,146 @@ ssl_eof:
 			break;
 		nr += npos;
 	}
-	assert(nr == wr_used);
+	if(unlikely(nr != wr_used)) {
+		LM_ERR("failure - nr(%lu) != wr_used(%lu)\n", (unsigned long)nr,
+				(unsigned long)wr_used);
+		return -1;
+	}
 	*plen = wr_used;
 	*pbuf = (const char *)wr_buf;
 	DBG("TLS connection has been closed\n");
 	TLS_WR_TRACE("(%p) end EOF (offs %d) => (%d\n", c, offs, *plen);
 	return *plen;
+}
+
+
+int tls_h_encode_mp_f(struct tcp_connection *c, const char **pbuf,
+		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
+		snd_flags_t *send_flags)
+{
+	static unsigned char wr_buf[TLS_WR_MBUF_SZ];
+
+	return tls_h_encode_helper_f(
+			c, pbuf, plen, rest_buf, rest_len, send_flags, wr_buf);
+}
+
+typedef struct tls_encode_params
+{
+	struct tcp_connection *c;
+	char *pbuf;
+	unsigned int plen;
+	char *rest_buf;
+	unsigned int rest_len;
+	snd_flags_t send_flags;
+	int pidx;
+} tls_encode_params_t;
+
+static void tls_h_encode_mt_thread_cb(void *p, int pidx)
+{
+	tls_encode_params_t *eparams = NULL;
+	tcpx_task_result_t *rtask = NULL;
+	unsigned char *wr_buf = NULL;
+
+	eparams = (tls_encode_params_t *)p;
+
+	rtask = (tcpx_task_result_t *)shm_mallocxz(sizeof(tcpx_task_result_t));
+	if(rtask == NULL) {
+		SHM_MEM_ERROR;
+		ksr_tcpx_thread_eresult(rtask, pidx);
+		return;
+	}
+	wr_buf = ksr_tcpx_thread_wrbuf(eparams->pidx);
+	rtask->code =
+			tls_h_encode_helper_f(eparams->c, (const char **)&eparams->pbuf,
+					&eparams->plen, (const char **)&eparams->rest_buf,
+					&eparams->rest_len, &eparams->send_flags, wr_buf);
+	rtask->data = eparams;
+	ksr_tcpx_thread_eresult(rtask, pidx);
+
+	return;
+}
+
+int tls_h_encode_mt_f(struct tcp_connection *c, const char **pbuf,
+		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
+		snd_flags_t *send_flags)
+{
+	int dsize = 0;
+	tcpx_task_t *ptask = NULL;
+	tcpx_task_result_t *rtask = NULL;
+	tls_encode_params_t *eparams = NULL;
+	char *ps = NULL;
+	int ret = 0;
+
+	LM_DBG("preparing task for tcp main process threads\n");
+
+	dsize = sizeof(tcpx_task_t) + sizeof(tls_encode_params_t)
+			+ (*plen) * sizeof(char) + 1;
+
+	ptask = (tcpx_task_t *)shm_mallocxz(dsize);
+	if(ptask == NULL) {
+		SHM_MEM_ERROR;
+		return -1;
+	}
+	ptask->exec = tls_h_encode_mt_thread_cb;
+	ptask->param = (void *)((char *)ptask + sizeof(tcpx_task_t));
+	eparams = (tls_encode_params_t *)((char *)ptask + sizeof(tcpx_task_t));
+	ps = (char *)eparams + sizeof(tls_encode_params_t);
+
+	eparams->c = c;
+	eparams->pbuf = ps;
+	memcpy(eparams->pbuf, *pbuf, *plen);
+	eparams->plen = *plen;
+	eparams->rest_buf = (char *)*rest_buf;
+	eparams->rest_len = *rest_len;
+	if(send_flags != NULL) {
+		memcpy(&eparams->send_flags, send_flags, sizeof(snd_flags_t));
+	}
+	eparams->pidx = process_no;
+
+	if(ksr_tcpx_task_send(ptask, process_no) < 0) {
+		LM_ERR("failed to send the task\n");
+		shm_free(ptask);
+		return -1;
+	}
+
+	ksr_tcpx_task_result_recv(&rtask, process_no);
+
+	if(rtask == NULL) {
+		LM_ERR("failed to get the result\n");
+		shm_free(ptask);
+		return -1;
+	}
+	ret = rtask->code;
+
+	*pbuf = eparams->pbuf;
+	*plen = eparams->plen;
+	if(eparams->rest_buf != NULL) {
+		*rest_buf = *pbuf + (eparams->rest_buf - ps);
+	}
+	*rest_len = eparams->rest_len;
+	if(send_flags != NULL) {
+		memcpy(send_flags, &eparams->send_flags, sizeof(snd_flags_t));
+	}
+
+	shm_free(ptask);
+	shm_free(rtask);
+	return ret;
+}
+
+
+/**
+ * tls encode core callback
+ * - for parameters see tls_h_encode_mp_f(...)
+ */
+int tls_h_encode_f(struct tcp_connection *c, const char **pbuf,
+		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,
+		snd_flags_t *send_flags)
+{
+	if(ksr_tcp_main_threads == 0) {
+		return tls_h_encode_mp_f(c, pbuf, plen, rest_buf, rest_len, send_flags);
+	} else {
+		return tls_h_encode_mt_f(c, pbuf, plen, rest_buf, rest_len, send_flags);
+	}
 }
 
 
@@ -985,7 +1399,7 @@ ssl_eof:
  *         tcp connection flags and might set c->state and r->error on
  *         EOF or error).
  */
-int tls_h_read_f(struct tcp_connection *c, rd_conn_flags_t *flags)
+int tls_h_read_mp_f(struct tcp_connection *c, rd_conn_flags_t *flags)
 {
 	struct tcp_req *r;
 	int bytes_free, bytes_read, read_size, ssl_error, ssl_read;
@@ -1034,7 +1448,8 @@ redo_read:
 	if(likely(!(*flags & (RD_CONN_EOF | RD_CONN_SHORT_READ)))) {
 		/* don't read more than the free bytes in the tcp req buffer */
 		read_size = MIN_unsigned(TLS_RD_MBUF_SZ, bytes_free);
-		bytes_read = tcp_read_data(c->fd, c, (char *)rd_buf, read_size, flags);
+		bytes_read =
+				tcp_read_data(_tconfd(c), c, (char *)rd_buf, read_size, flags);
 		TLS_RD_TRACE("(%p, %p) tcp_read_data(..., %d, *%d) => %d bytes\n", c,
 				flags, read_size, *flags, bytes_read);
 		/* try SSL_read even on 0 bytes read, it might have
@@ -1053,7 +1468,11 @@ redo_read:
 				break;
 			nw += npos;
 		}
-		assert(nw == bytes_read);
+		if(unlikely(nw != bytes_read)) {
+			LM_ERR("failure - nw(%lu) != bytes_read(%lu)\n", (unsigned long)nw,
+					(unsigned long)bytes_read);
+			goto error;
+		}
 	}
 continue_ssl_read:
 	ssl_error = WOLFSSL_ERROR_NONE;
@@ -1204,9 +1623,15 @@ continue_ssl_read:
 				break;
 			nr += npos;
 		}
-		assert(nr == wr_used);
-		if(unlikely(tcpconn_send_unsafe(
-							c->fd, c, (char *)wr_buf, wr_used, c->send_flags)
+		if(unlikely(nr != wr_used)) {
+			LM_ERR("failure - nr(%lu) != wr_used(%lu)\n", (unsigned long)nr,
+					(unsigned long)wr_used);
+			lock_release(&c->write_lock);
+			TLS_RD_TRACE("(%p, %p) tcpconn_send_unsafe failure\n", c, flags);
+			goto error_send;
+		}
+		if(unlikely(tcpconn_send_unsafe(_tconfd(c), c, (char *)wr_buf, wr_used,
+							c->send_flags)
 					< 0)) {
 			lock_release(&c->write_lock);
 			TLS_RD_TRACE("(%p, %p) tcpconn_send_unsafe error\n", c, flags);
@@ -1224,7 +1649,7 @@ continue_ssl_read:
 			break;
 		case WOLFSSL_ERROR_ZERO_RETURN:
 			/* SSL EOF */
-			TLS_RD_TRACE("(%p, %p) SSL EOF (fd=%d)\n", c, flags, c->fd);
+			TLS_RD_TRACE("(%p, %p) SSL EOF (fd=%d)\n", c, flags, _tconfd(c));
 			goto ssl_eof;
 		case WOLFSSL_ERROR_WANT_READ:
 			TLS_RD_TRACE("(%p, %p) SSL_ERROR_WANT_READ *flags=%d\n", c, flags,
@@ -1370,6 +1795,96 @@ bug:
 	return -1;
 }
 
+
+typedef struct tls_read_params
+{
+	struct tcp_connection *c;
+	rd_conn_flags_t flags;
+	int pidx;
+} tls_read_params_t;
+
+
+static void tls_h_read_mt_thread_cb(void *p, int pidx)
+{
+	tls_read_params_t *eparams = NULL;
+	tcpx_task_result_t *rtask = NULL;
+
+	eparams = (tls_read_params_t *)p;
+
+	rtask = (tcpx_task_result_t *)shm_mallocxz(sizeof(tcpx_task_result_t));
+	if(rtask == NULL) {
+		SHM_MEM_ERROR;
+		ksr_tcpx_thread_eresult(rtask, pidx);
+		return;
+	}
+	rtask->code = tls_h_read_mp_f(eparams->c, &eparams->flags);
+	rtask->data = eparams;
+	ksr_tcpx_thread_eresult(rtask, pidx);
+
+	return;
+}
+
+
+int tls_h_read_mt_f(struct tcp_connection *c, rd_conn_flags_t *flags)
+{
+	int dsize = 0;
+	tcpx_task_t *ptask = NULL;
+	tcpx_task_result_t *rtask = NULL;
+	tls_read_params_t *eparams = NULL;
+	int ret = 0;
+
+	LM_DBG("preparing task for tcp main process threads\n");
+
+	dsize = sizeof(tcpx_task_t) + sizeof(tls_read_params_t);
+
+	ptask = (tcpx_task_t *)shm_mallocxz(dsize);
+	if(ptask == NULL) {
+		SHM_MEM_ERROR;
+		return -1;
+	}
+	ptask->exec = tls_h_read_mt_thread_cb;
+	ptask->param = (void *)((char *)ptask + sizeof(tcpx_task_t));
+	eparams = (tls_read_params_t *)((char *)ptask + sizeof(tcpx_task_t));
+
+	eparams->c = c;
+	if(flags != NULL) {
+		memcpy(&eparams->flags, flags, sizeof(rd_conn_flags_t));
+	}
+	eparams->pidx = process_no;
+
+	if(ksr_tcpx_task_send(ptask, process_no) < 0) {
+		LM_ERR("failed to send the task\n");
+		shm_free(ptask);
+		return -1;
+	}
+
+	ksr_tcpx_task_result_recv(&rtask, process_no);
+
+	if(rtask == NULL) {
+		LM_ERR("failed to get the result\n");
+		shm_free(ptask);
+		return -1;
+	}
+	ret = rtask->code;
+
+	if(flags != NULL) {
+		memcpy(flags, &eparams->flags, sizeof(rd_conn_flags_t));
+	}
+
+	shm_free(ptask);
+	shm_free(rtask);
+	return ret;
+}
+
+
+int tls_h_read_f(struct tcp_connection *c, rd_conn_flags_t *flags)
+{
+	if(ksr_tcp_main_threads == 0) {
+		return tls_h_read_mp_f(c, flags);
+	} else {
+		return tls_h_read_mt_f(c, flags);
+	}
+}
 
 static int _tls_evrt_connection_out = -1; /* default disabled */
 str sr_tls_event_callback = STR_NULL;

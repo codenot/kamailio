@@ -6,7 +6,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -16,7 +16,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -26,6 +26,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -116,6 +118,9 @@ str regex_sdp_ip_prefix_to_maintain_in_fd = {0, 0};
 //If set this will include an additional filter for all existing filters using the next odd port up - as this is the RTCP port
 int include_rtcp_fd = 0;
 
+/** If set, this uses the bottom Via for identification of UE, always, on both requests and responses, over Contact. */
+int trust_bottom_via = 0;
+
 int cdp_event_list_size_threshold =
 		0; /**Threshold for size of cdp event list after which a warning is logged */
 
@@ -135,6 +140,8 @@ static void mod_destroy(void);
 
 static int fixup_aar_register(void **param, int param_no);
 static int fixup_aar(void **param, int param_no);
+static int fixup_free_aar_register(void **param, int param_no);
+static int fixup_free_aar(void **param, int param_no);
 
 int *callback_singleton; /*< Callback singleton */
 
@@ -215,61 +222,56 @@ static int pv_t_copy_msg(struct sip_msg *src, struct sip_msg *dst)
 }
 
 
+/* clang-format off */
 static cmd_export_t cmds[] = {
-		{"Rx_AAR", (cmd_function)cfg_rx_aar, 4, fixup_aar, 0, ONREPLY_ROUTE},
-		{"Rx_AAR_Register", (cmd_function)cfg_rx_aar_register, 2,
-				fixup_aar_register, 0, REQUEST_ROUTE},
-		{0, 0, 0, 0, 0, 0}};
+	{"Rx_AAR", (cmd_function)cfg_rx_aar, 4, fixup_aar, fixup_free_aar, ONREPLY_ROUTE},
+	{"Rx_AAR_Register", (cmd_function)cfg_rx_aar_register, 2, fixup_aar_register, fixup_free_aar_register, REQUEST_ROUTE},
+	{0, 0, 0, 0, 0, 0},
+};
 
-static param_export_t params[] = {{"rx_dest_realm", PARAM_STR, &rx_dest_realm},
-		{"rx_forced_peer", PARAM_STR, &rx_forced_peer},
-		{"rx_auth_expiry", INT_PARAM, &rx_auth_expiry},
-		{"af_signaling_ip", PARAM_STR,
-				&af_signaling_ip}, /* IP of this P-CSCF, to be used in the flow for the AF-signaling */
-		{"af_signaling_ip6", PARAM_STR,
-				&af_signaling_ip6}, /* IPv6 of this P-CSCF, to be used in the flow for the AF-signaling */
-		{"media_type", PARAM_STR, &component_media_type},			/*  */
-		{"flow_protocol", PARAM_STR, &flow_protocol},				/*  */
-		{"omit_flow_ports", INT_PARAM, &omit_flow_ports},			/*  */
-		{"rs_default_bandwidth", INT_PARAM, &rs_default_bandwidth}, /*  */
-		{"rr_default_bandwidth", INT_PARAM, &rr_default_bandwidth}, /*  */
-		{"cdp_event_latency", INT_PARAM,
-				&cdp_event_latency}, /*flag: report slow processing of CDP callback events or not */
-		{"cdp_event_threshold", INT_PARAM,
-				&cdp_event_threshold}, /*time in ms above which we should report slow processing of CDP callback event*/
-		{"cdp_event_latency_log", INT_PARAM,
-				&cdp_event_latency_loglevel}, /*log-level to use to report slow processing of CDP callback event*/
-		{"authorize_video_flow", INT_PARAM,
-				&authorize_video_flow}, /*whether or not we authorize resources for video flows*/
-		{"cdp_event_list_size_threshold", INT_PARAM,
-				&cdp_event_list_size_threshold}, /**Threshold for size of cdp event list after which a warning is logged */
-		{"audio_default_bandwidth", INT_PARAM, &audio_default_bandwidth},
-		{"video_default_bandwidth", INT_PARAM, &video_default_bandwidth},
-		{"early_qosrelease_reason", PARAM_STR, &early_qosrelease_reason},
-		{"confirmed_qosrelease_headers", PARAM_STR,
-				&confirmed_qosrelease_headers},
-		{"terminate_dialog_on_rx_failure", INT_PARAM,
-				&terminate_dialog_on_rx_failure},
-		{"delete_contact_on_rx_failure", INT_PARAM,
-				&delete_contact_on_rx_failure},
-		{"regex_sdp_ip_prefix_to_maintain_in_fd", PARAM_STR,
-				&regex_sdp_ip_prefix_to_maintain_in_fd},
-		{"include_rtcp_fd", INT_PARAM, &include_rtcp_fd},
-		{"suspend_transaction", INT_PARAM, &_ims_qos_suspend_transaction},
-		{"recv_mode", PARAM_INT, &_imsqos_params.recv_mode},
-		{"dialog_direction", PARAM_INT, &_imsqos_params.dlg_direction},
-		{0, 0, 0}};
+static param_export_t params[] = {
+	{"rx_dest_realm", PARAM_STR, &rx_dest_realm},
+	{"rx_forced_peer", PARAM_STR, &rx_forced_peer},
+	{"rx_auth_expiry", PARAM_INT, &rx_auth_expiry},
+	{"af_signaling_ip", PARAM_STR, &af_signaling_ip}, /* IP of this P-CSCF, to be used in the flow for the AF-signaling */
+	{"af_signaling_ip6", PARAM_STR, &af_signaling_ip6}, /* IPv6 of this P-CSCF, to be used in the flow for the AF-signaling */
+	{"media_type", PARAM_STR, &component_media_type},
+	{"flow_protocol", PARAM_STR, &flow_protocol},
+	{"omit_flow_ports", PARAM_INT, &omit_flow_ports},
+	{"rs_default_bandwidth", PARAM_INT, &rs_default_bandwidth},
+	{"rr_default_bandwidth", PARAM_INT, &rr_default_bandwidth},
+	{"cdp_event_latency", PARAM_INT, &cdp_event_latency}, /*flag: report slow processing of CDP callback events or not */
+	{"cdp_event_threshold", PARAM_INT, &cdp_event_threshold}, /*time in ms above which we should report slow processing of CDP callback event*/
+	{"cdp_event_latency_log", PARAM_INT, &cdp_event_latency_loglevel}, /*log-level to use to report slow processing of CDP callback event*/
+	{"authorize_video_flow", PARAM_INT, &authorize_video_flow}, /*whether or not we authorize resources for video flows*/
+	{"cdp_event_list_size_threshold", PARAM_INT, &cdp_event_list_size_threshold}, /**Threshold for size of cdp event list after which a warning is logged */
+	{"audio_default_bandwidth", PARAM_INT, &audio_default_bandwidth},
+	{"video_default_bandwidth", PARAM_INT, &video_default_bandwidth},
+	{"early_qosrelease_reason", PARAM_STR, &early_qosrelease_reason},
+	{"confirmed_qosrelease_headers", PARAM_STR, &confirmed_qosrelease_headers},
+	{"terminate_dialog_on_rx_failure", PARAM_INT, &terminate_dialog_on_rx_failure},
+	{"delete_contact_on_rx_failure", PARAM_INT, &delete_contact_on_rx_failure},
+	{"regex_sdp_ip_prefix_to_maintain_in_fd", PARAM_STR, &regex_sdp_ip_prefix_to_maintain_in_fd},
+	{"include_rtcp_fd", PARAM_INT, &include_rtcp_fd},
+	{"suspend_transaction", PARAM_INT, &_ims_qos_suspend_transaction},
+	{"recv_mode", PARAM_INT, &_imsqos_params.recv_mode},
+	{"dialog_direction", PARAM_INT, &_imsqos_params.dlg_direction},
+	{"trust_bottom_via", PARAM_INT, &trust_bottom_via},
+	{0, 0, 0},
+};
 
 
 /** module exports */
 struct module_exports exports = {"ims_qos", DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,			/* Exported functions */
-		params, 0,		/* exported RPC methods */
-		0,				/* exported pseudo-variables */
-		0,				/* response handling function */
-		mod_init,		/* module initialization function */
-		mod_child_init, /* per-child init function */
-		mod_destroy};
+	cmds,			/* Exported functions */
+	params, 0,		/* exported RPC methods */
+	0,				/* exported pseudo-variables */
+	0,				/* response handling function */
+	mod_init,		/* module initialization function */
+	mod_child_init, /* per-child init function */
+	mod_destroy
+};
+/* clang-format on */
 
 /**
  * init module function
@@ -673,15 +675,17 @@ void callback_pcscf_contact_cb(struct pcontact *c, int type, void *param)
 	LM_DBG("PCSCF Contact Callback!\n");
 	LM_DBG("Contact AOR: [%.*s]\n", c->aor.len, c->aor.s);
 	LM_DBG("Callback type [%d]\n", type);
+	LM_DBG("Reg state [%s]\n", reg_state_to_string(c->reg_state));
 
 
 	if(type == PCSCF_CONTACT_EXPIRE || type == PCSCF_CONTACT_DELETE) {
 		// we don't need to send STR if no QoS was ever successfully registered!
 		if(must_send_str && (c->reg_state != PCONTACT_REG_PENDING)
 				&& (c->reg_state != PCONTACT_REG_PENDING_AAR)) {
-			LM_DBG("Received notification of contact (in state [%d] deleted "
+			LM_DBG("Received notification of contact (in state [%s] deleted "
 				   "for signalling bearer with  with Rx session ID: [%.*s]\n",
-					c->reg_state, c->rx_session_id.len, c->rx_session_id.s);
+					reg_state_to_string(c->reg_state), c->rx_session_id.len,
+					c->rx_session_id.s);
 			LM_DBG("Sending STR\n");
 			rx_send_str(&c->rx_session_id);
 		}
@@ -721,26 +725,35 @@ static int get_identifier(str *src)
 
 uint16_t check_ip_version(str ip)
 {
+	int getaddrret;
+	uint16_t ret = 0;
 	struct addrinfo hint, *res = NULL;
+	char *s = pkg_malloc(ip.len + 1);
+
+	if(!s) {
+		PKG_MEM_ERROR;
+		return ret;
+	}
+	memcpy(s, ip.s, ip.len);
+	s[ip.len] = '\0';
 	memset(&hint, '\0', sizeof(hint));
 	hint.ai_family = AF_UNSPEC;
 	hint.ai_flags = AI_NUMERICHOST;
-	int getaddrret = getaddrinfo(ip.s, NULL, &hint, &res);
+	getaddrret = getaddrinfo(s, NULL, &hint, &res);
+	pkg_free(s);
 	if(getaddrret) {
 		LM_ERR("GetAddrInfo returned an error !\n");
-		return 0;
+		return ret;
 	}
 	if(res->ai_family == AF_INET) {
-		freeaddrinfo(res);
-		return AF_INET;
+		ret = AF_INET;
 	} else if(res->ai_family == AF_INET6) {
-		freeaddrinfo(res);
-		return AF_INET6;
+		ret = AF_INET6;
 	} else {
-		freeaddrinfo(res);
-		LM_ERR("unknown IP format \n");
-		return 0;
+		LM_ERR("unknown IP format\n");
 	}
+	freeaddrinfo(res);
+	return ret;
 }
 
 /* Wrapper to send AAR from config file - this only allows for AAR for calls - not register, which uses r_rx_aar_register
@@ -779,8 +792,8 @@ static int w_rx_aar(struct sip_msg *msg, char *route, char *dir, char *c_id,
 	struct dlg_cell *dlg = 0;
 
 	cfg_action_t *cfg_action = 0;
-	saved_transaction_t *saved_t_data =
-			0; //data specific to each contact's AAR async call
+	// Data specific to each contact's AAR async call.
+	saved_transaction_t *saved_t_data = 0;
 	char *direction = dir;
 
 	// standard config
@@ -898,9 +911,12 @@ static int w_rx_aar(struct sip_msg *msg, char *route, char *dir, char *c_id,
 			|| (t->method.len == 6
 					&& (memcmp(t->method.s, "INVITE", 6) == 0
 							|| memcmp(t->method.s, "UPDATE", 6) == 0))) {
-		if(cscf_get_content_length(msg) == 0
-				|| cscf_get_content_length(orig_sip_request_msg) == 0) {
-			LM_WARN("No SDP offer answer -> therefore we can not do Rx AAR");
+		// UE sends a SIP UPDATE with no SDP in the message body for session refresh.
+		if((memcmp(t->method.s, "UPDATE", 6) != 0)
+				&& (cscf_get_content_length(msg) == 0
+						|| cscf_get_content_length(orig_sip_request_msg)
+								   == 0)) {
+			LM_WARN("No SDP offer/answer in message. Not sending Rx AAR");
 			//goto aarna; //AAR na if we don't have offer/answer pair
 			return result;
 		}
@@ -976,13 +992,19 @@ static int w_rx_aar(struct sip_msg *msg, char *route, char *dir, char *c_id,
 	memcpy(saved_t_data->ftag.s, ftag.s, ftag.len);
 	saved_t_data->ftag.len = ftag.len;
 
-	saved_t_data->aar_update =
-			0; //by default we say this is not an aar update - if it is we set it below
+	// Flag to indicate this is an initial AAR or an update to already sent AAR.
+	// Flag will be updated later on based on the presence of Rx session and other conditions.
+	saved_t_data->aar_update = 0;
+
+	// Flag indicating whether its the case of session refresh.
+	// In such cases, we need to send AAR using previously authorized flows to the PCRF.
+	saved_t_data->session_refresh = 0;
 
 	//store branch
 	int branch;
 	if(tmb.t_check(msg, &branch) == -1) {
 		LOG(L_ERR, "ERROR: t_suspend: failed find UAC branch\n");
+		shm_free(saved_t_data);
 		return result;
 	}
 
@@ -1228,7 +1250,7 @@ static int w_rx_aar(struct sip_msg *msg, char *route, char *dir, char *c_id,
 				auth_session->id.len, auth_session->id.s, direction);
 	} else {
 		LM_DBG("Update AAR session for this dialog in mode %s\n", direction);
-		//check if this is triggered by a 183 - if so break here as it is probably a re-transmit
+		// Check if this is triggered by a 183 - if so break here as it is probably a re-transmit.
 		if((msg->first_line).u.reply.statuscode == 183) {
 			LM_DBG("Received a 183 for a diameter session that already exists "
 				   "- just going to ignore this\n");
@@ -1236,8 +1258,24 @@ static int w_rx_aar(struct sip_msg *msg, char *route, char *dir, char *c_id,
 			result = CSCF_RETURN_TRUE;
 			goto ignore;
 		}
-		saved_t_data->aar_update =
-				1; //this is an update aar - we set this so on async_aar we know this is an update and act accordingly
+
+		if((memcmp(t->method.s, "UPDATE", 6) == 0)
+				&& (cscf_get_content_length(msg) == 0
+						|| cscf_get_content_length(orig_sip_request_msg)
+								   == 0)) {
+			rx_authdata_p =
+					(rx_authsessiondata_t *)auth_session->u.auth.generic_data;
+			if(rx_authdata_p->first_current_flow_description == NULL) {
+				LM_WARN("No existing authorized flows for this session - not "
+						"sending AAR update for session refresh with no SDP");
+				goto error;
+			}
+			saved_t_data->session_refresh = 1;
+		} else {
+			// In all other cases, we consider this as a AAR update.
+			// We set this so on async_aar we know this is an update and act accordingly.
+			saved_t_data->aar_update = 1;
+		}
 	}
 
 	dlg = dlgb.get_dlg(msg);
@@ -1412,7 +1450,7 @@ static int w_rx_aar_register(
 		}
 	}
 
-	vb = cscf_get_ue_via(msg);
+	vb = trust_bottom_via ? cscf_get_last_via(msg) : cscf_get_ue_via(msg);
 	via_port = vb->port ? vb->port : 5060;
 	via_proto = vb->proto;
 
@@ -1473,8 +1511,8 @@ static int w_rx_aar_register(
 	}
 
 	char buff[IP_ADDR_MAX_STR_SIZE];
-	if(_imsqos_params.recv_mode == 0) {
-		//we use the received IP address for the framed_ip_address
+	if(_imsqos_params.recv_mode == 0 && !trust_bottom_via) {
+		// we use the received IP address for the framed_ip_address
 		recv_ip.s = ip_addr2a(&msg->rcv.src_ip);
 		recv_ip.len = strlen(ip_addr2a(&msg->rcv.src_ip));
 
@@ -1500,9 +1538,8 @@ static int w_rx_aar_register(
 	LM_DBG("Message via is [%d://%.*s:%d]\n", vb->proto, vb->host.len,
 			vb->host.s, via_port);
 
-	lock_get(
-			saved_t_data
-					->lock); //we lock here to make sure we send all requests before processing replies asynchronously
+	//we lock here to make sure we send all requests before processing replies asynchronously
+	lock_get(saved_t_data->lock);
 	for(h = msg->contact; h; h = h->next) {
 		if(h->type == HDR_CONTACT_T && h->parsed) {
 			for(c = ((contact_body_t *)h->parsed)->contacts; c; c = c->next) {
@@ -1527,9 +1564,10 @@ static int w_rx_aar_register(
 				} else if(pcontact->reg_state == PCONTACT_REG_PENDING
 						  || pcontact->reg_state
 									 == PCONTACT_REGISTERED) { //NEW reg request
-					LM_DBG("Contact [%.*s] exists and is in state "
-						   "PCONTACT_REG_PENDING or PCONTACT_REGISTERED\n",
-							pcontact->aor.len, pcontact->aor.s);
+					LM_DBG("Contact [%.*s] exists and is in state %s or %s\n",
+							pcontact->aor.len, pcontact->aor.s,
+							reg_state_to_string(PCONTACT_REG_PENDING),
+							reg_state_to_string(PCONTACT_REGISTERED));
 
 					//check for existing Rx session
 					if(pcontact->rx_session_id.len > 0
@@ -1659,14 +1697,14 @@ static int w_rx_aar_register(
 					if(!ret) {
 						LM_ERR("Failed to send AAR\n");
 						lock_release(saved_t_data->lock);
-						free_saved_transaction_data(
-								local_data); //free the local data becuase the CDP async request was not successful (we must free here)
+						//free the local data because the CDP async request was not successful (we must free here)
+						free_saved_transaction_data(local_data);
 						goto error;
 					} else {
 						aar_sent = 1;
 						//before we send - bump up the reply counter
-						saved_t_data
-								->answers_not_received++; //we don't need to lock as we already hold the lock above
+						//we don't need to lock as we already hold the lock above
+						saved_t_data->answers_not_received++;
 					}
 				} else {
 					//contact exists - this is a re-registration, for now we just ignore this
@@ -1771,6 +1809,14 @@ static int fixup_aar_register(void **param, int param_no)
 	return 0;
 }
 
+static int fixup_free_aar_register(void **param, int param_no)
+{
+	if(param_no == 1) { //route name - static or dynamic string (config vars)
+		fixup_free_spve_null(param, param_no);
+	}
+
+	return 0;
+}
 static int fixup_aar(void **param, int param_no)
 {
 	str s;
@@ -1802,6 +1848,16 @@ static int fixup_aar(void **param, int param_no)
 		return E_CFG;
 	}
 
+	return 0;
+}
+
+static int fixup_free_aar(void **param, int param_no)
+{
+	if(param_no == 1) { //route name - static or dynamic string (config vars)
+		fixup_free_spve_null(param, param_no);
+	} else if(param_no == 3) {
+		fixup_var_str_12(param, param_no);
+	}
 	return 0;
 }
 

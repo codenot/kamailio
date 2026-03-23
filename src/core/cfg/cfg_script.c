@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -331,7 +333,7 @@ error:
 	return -1;
 }
 
-/* destory a dynamically allocated group definition */
+/* destroy a dynamically allocated group definition */
 void cfg_script_destroy(cfg_group_t *group)
 {
 	int i;

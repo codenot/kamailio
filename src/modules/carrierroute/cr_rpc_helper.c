@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -105,7 +107,7 @@ static int update_route_data_recursor(
 						if(rr->host.s) {
 							shm_free(rr->host.s);
 						}
-						if(opts->new_host.len) {
+						if(opts->new_host.s && opts->new_host.len) {
 							if((rr->host.s = shm_malloc(opts->new_host.len + 1))
 									== NULL) {
 								SHM_MEM_ERROR;
@@ -130,12 +132,10 @@ static int update_route_data_recursor(
 							FIFO_ERR(E_RESET);
 							return -1;
 						}
-						if(opts->new_host.len > 0) {
+						if(opts->new_host.s && opts->new_host.len > 0) {
 							LM_INFO("deactivating host %.*s\n", rr->host.len,
 									rr->host.s);
-							if(opts->new_host.s
-									&& (strcmp(opts->new_host.s, rr->host.s)
-											== 0)) {
+							if(strcmp(opts->new_host.s, rr->host.s) == 0) {
 								LM_ERR("Backup host the same as initial host "
 									   "%.*s",
 										rr->host.len, rr->host.s);

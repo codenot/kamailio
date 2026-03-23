@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -43,7 +45,8 @@ int rpc_check_reload(rpc_t *rpc, void *ctx)
 		rpc->fault(ctx, 500, "ongoing reload");
 		return -1;
 	}
-	*perm_rpc_reload_time = time(NULL);
+	// we are reloading, don't allow new reloads
+	*perm_rpc_reload_time = time(NULL) + 86400;
 	return 0;
 }
 
@@ -57,12 +60,22 @@ void rpc_trusted_reload(rpc_t *rpc, void *c)
 		return;
 	}
 
-	if(reload_trusted_table_cmd() != 1) {
-		rpc->fault(c, 500, "Reload failed.");
-		return;
+	// only reload the hash buckets then, when the cache is activated (db_mode = 1)
+	if(perm_db_mode == ENABLE_CACHE) {
+		if(reload_trusted_table_cmd() != 1) {
+			rpc->fault(c, 500, "Reload failed.");
+			goto done;
+		}
+		rpc->rpl_printf(c, "Reload OK");
+	} else {
+		LM_DBG("Skip trusted sources reload in hash buckets, caching is "
+			   "disabled.\n");
+		rpc->fault(c, 500, "Reload skipped (disabled cache)");
 	}
 
-	rpc->rpl_printf(c, "Reload OK");
+done:
+	// reloading is done
+	*perm_rpc_reload_time = time(NULL);
 	return;
 }
 
@@ -99,10 +112,13 @@ void rpc_address_reload(rpc_t *rpc, void *c)
 
 	if(reload_address_table_cmd() != 1) {
 		rpc->fault(c, 500, "Reload failed.");
-		return;
+		goto done;
 	}
 
 	rpc->rpl_printf(c, "Reload OK");
+done:
+	// reloading is done
+	*perm_rpc_reload_time = time(NULL);
 	return;
 }
 

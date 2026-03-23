@@ -26,6 +26,7 @@
 #include "dprint.h"
 #include "mem/mem.h"
 #include "route.h"
+#include "fmsg.h"
 #include "events.h"
 
 static sr_event_cb_t _sr_events_list;
@@ -75,6 +76,36 @@ void sr_core_ert_run(sip_msg_t *msg, int e)
 			set_route_type(rtb);
 			break;
 	}
+}
+
+/**
+ *
+ */
+int sr_core_ert_run_xname(char *evname)
+{
+	struct run_act_ctx ctx;
+	int rtb;
+	int ridx;
+	sip_msg_t *fmsg;
+
+	fmsg = faked_msg_get_next_clear();
+	if(fmsg == NULL) {
+		LM_ERR("cannot create a fake message\n");
+		return -1;
+	}
+	ridx = route_lookup(&event_rt, evname);
+	if(ridx <= 0 || event_rt.rlist[ridx] == NULL) {
+		LM_DBG("event_route[%s] not defined - skipping\n", evname);
+		return 0;
+	}
+
+	rtb = get_route_type();
+	set_route_type(REQUEST_ROUTE);
+	init_run_actions_ctx(&ctx);
+	run_top_route(event_rt.rlist[ridx], fmsg, &ctx);
+	set_route_type(rtb);
+
+	return 0;
 }
 
 /**
@@ -178,9 +209,13 @@ int sr_event_register_cb(int type, sr_event_cb_f f)
 				return -1;
 			break;
 		case SREV_TCP_CLOSED:
-			if(_sr_events_list.tcp_closed == 0)
-				_sr_events_list.tcp_closed = f;
-			else
+			for(i = 0; i < SREV_CB_LIST_SIZE; i++) {
+				if(_sr_events_list.tcp_closed[i] == 0) {
+					_sr_events_list.tcp_closed[i] = f;
+					break;
+				}
+			}
+			if(i == SREV_CB_LIST_SIZE)
 				return -1;
 			break;
 		case SREV_NET_DATA_RECV:
@@ -341,8 +376,13 @@ int sr_event_exec(int type, sr_event_param_t *evp)
 			} else
 				return 1;
 		case SREV_TCP_CLOSED:
-			if(unlikely(_sr_events_list.tcp_closed != 0)) {
-				ret = _sr_events_list.tcp_closed(evp);
+			if(unlikely(_sr_events_list.tcp_closed[0] != 0)) {
+				ret = 0;
+				for(i = 0;
+						i < SREV_CB_LIST_SIZE && _sr_events_list.tcp_closed[i];
+						i++) {
+					ret |= _sr_events_list.tcp_closed[i](evp);
+				}
 				return ret;
 			} else
 				return 1;
@@ -418,7 +458,7 @@ int sr_event_enabled(int type)
 		case SREV_RCV_NOSIP:
 			return (_sr_events_list.rcv_nosip != 0) ? 1 : 0;
 		case SREV_TCP_CLOSED:
-			return (_sr_events_list.tcp_closed != 0) ? 1 : 0;
+			return (_sr_events_list.tcp_closed[0] != 0) ? 1 : 0;
 		case SREV_NET_DATA_RECV:
 			return (_sr_events_list.net_data_recv != 0) ? 1 : 0;
 		case SREV_NET_DATA_SENT:

@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -97,30 +99,32 @@ str cdr_q_name = {0, 0};
 static char *cdr_log_facility_str = 0;
 static char *cdr_json_pre_encoded_prefix_str = 0;
 str cdr_json_pre_encoded_prefix = {0, 0};
+str acc_json_cdr_skip = {NULL, 0};
 
 static cmd_export_t cmds[] = {{0, 0, 0, 0, 0, 0}};
 
 
-static param_export_t params[] = {{"acc_flag", INT_PARAM, &acc_flag},
-		{"acc_missed_flag", INT_PARAM, &acc_missed_flag},
+static param_export_t params[] = {{"acc_flag", PARAM_INT, &acc_flag},
+		{"acc_missed_flag", PARAM_INT, &acc_missed_flag},
 		{"acc_extra", PARAM_STRING, &acc_extra_str},
 		{"acc_pre_encoded_prefix", PARAM_STRING,
 				&acc_json_pre_encoded_prefix_str},
-		{"acc_time_mode", INT_PARAM, &acc_time_mode},
+		{"acc_time_mode", PARAM_INT, &acc_time_mode},
 		{"acc_time_format", PARAM_STRING, &acc_time_format},
-		{"acc_log_level", INT_PARAM, &acc_log_level},
+		{"acc_log_level", PARAM_INT, &acc_log_level},
 		{"acc_log_facility", PARAM_STRING, &acc_log_facility_str},
 		{"acc_output_mqueue", PARAM_STRING, &acc_output_mqueue_str},
-		{"acc_output_syslog", INT_PARAM, &acc_output_syslog},
+		{"acc_output_syslog", PARAM_INT, &acc_output_syslog},
 		{"cdr_extra", PARAM_STRING, &cdr_extra_str},
 		{"cdr_pre_encoded_prefix", PARAM_STRING,
 				&cdr_json_pre_encoded_prefix_str},
-		{"cdr_enable", INT_PARAM, &cdr_enable},
-		{"cdr_expired_dlg_enable", INT_PARAM, &cdr_expired_dlg_enable},
-		{"cdr_log_level", INT_PARAM, &cdr_log_level},
+		{"cdr_enable", PARAM_INT, &cdr_enable},
+		{"cdr_skip", PARAM_STR, &acc_json_cdr_skip},
+		{"cdr_expired_dlg_enable", PARAM_INT, &cdr_expired_dlg_enable},
+		{"cdr_log_level", PARAM_INT, &cdr_log_level},
 		{"cdr_log_facility", PARAM_STRING, &cdr_log_facility_str},
 		{"cdr_output_mqueue", PARAM_STRING, &cdr_output_mqueue_str},
-		{"cdr_output_syslog", INT_PARAM, &cdr_output_syslog},
+		{"cdr_output_syslog", PARAM_INT, &cdr_output_syslog},
 
 		{0, 0, 0}};
 
@@ -450,7 +454,19 @@ int cdr_json_write(struct dlg_cell *dlg, struct sip_msg *req, cdr_info_t *inf)
 	int extra_cnt = 0;
 	int core_cnt = 0;
 
-	json_t *object = json_object();
+	json_t *object = NULL;
+
+	/* Skip cdr if cdr_skip dlg_var exists */
+	if(acc_json_cdr_skip.len > 0) {
+		str nocdr_val = {0};
+		dlgb.get_dlg_varval(dlg, &acc_json_cdr_skip, &nocdr_val);
+		if(nocdr_val.s) {
+			LM_DBG("cdr_skip dlg_var set, skip cdr!");
+			return 0;
+		}
+	}
+
+	object = json_object();
 
 	/* get default values */
 	core_cnt = accb.get_core_cdr_attrs(dlg, inf->varr, inf->iarr, inf->tarr);

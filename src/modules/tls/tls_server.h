@@ -52,11 +52,12 @@ typedef struct tls_rd_buf
 /* tls conn flags */
 #define F_TLS_CON_WR_WANTS_RD 1	  /* write wants read */
 #define F_TLS_CON_HANDSHAKED 2	  /* connection is handshaked */
-#define F_TLS_CON_RENEGOTIATION 4 /* renegotiation by clinet */
+#define F_TLS_CON_RENEGOTIATION 4 /* renegotiation by client */
 
 typedef struct tls_extra_data
 {
 	tls_domains_cfg_t *cfg; /* Configuration used for this connection */
+	str dom;				/* tls_domain_str() for this connection */
 	SSL *ssl;				/* SSL context used for the connection */
 	BIO *rwbio;				/* bio used for read/write
 							 * (openssl code might add buffering BIOs so
@@ -65,6 +66,21 @@ typedef struct tls_extra_data
 	struct tls_rd_buf *enc_rd_buf;
 	unsigned int flags;
 	enum tls_conn_states state;
+
+	char *ssl_servername;
+	char *ssl_cipher_name;
+	char ssl_cipher_desc[128];
+	char ssl_version[32];
+	int ssl_cipher_bits;
+	long ssl_verify_result;
+
+	unsigned char *ssl_my_cert;	  /* shared memory - must be free'd  */
+	int ssl_my_cert_len;		  /* shared memory must be free'd */
+	unsigned char *ssl_peer_cert; /* shared memory must be free'd */
+	int ssl_peer_cert_len;		  /* shared memory must be free'd */
+
+	unsigned char *ssl_cert_chain;
+	int ssl_cert_chain_len;
 } tls_extra_data_t;
 
 
@@ -86,6 +102,13 @@ void tls_h_tcpconn_clean_f(struct tcp_connection *c);
  * shut down the TLS connection
  */
 void tls_h_tcpconn_close_f(struct tcp_connection *c, int fd);
+
+int tls_h_match_domain_f(
+		struct tcp_connection *c, struct ip_addr *ip, unsigned short port);
+
+int tls_h_match_connections_domain_f(
+		struct tcp_connection *l_c, struct tcp_connection *r_c);
+
 
 int tls_h_encode_f(struct tcp_connection *c, const char **pbuf,
 		unsigned int *plen, const char **rest_buf, unsigned int *rest_len,

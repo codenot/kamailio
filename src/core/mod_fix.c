@@ -174,11 +174,18 @@ int fixup_uint_uint(void **param, int param_no)
 
 	s.s = *param;
 	s.len = strlen(s.s);
-	if(likely(str2int(&s, &num) == 0)) {
+	if(s.len > 2 && s.s[0] == '0' && s.s[1] == 'x') {
+		if(hexstr2int(s.s, s.len, &num) < 0) {
+			/* not a hex number */
+			return E_UNSPEC;
+		}
 		*param = (void *)(long)num;
-	} else
+	} else if(likely(str2int(&s, &num) == 0)) {
+		*param = (void *)(long)num;
+	} else {
 		/* not a number */
 		return E_UNSPEC;
+	}
 	return 0;
 }
 
@@ -933,6 +940,40 @@ int fixup_free_ssi(void **param, int param_no)
 /**
  *
  */
+int fixup_sis(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+			return fixup_spve_null(param, 1);
+		case 2:
+			return fixup_igp_null(param, 1);
+		case 3:
+			return fixup_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_free_sis(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+			return fixup_free_spve_null(param, 1);
+		case 2:
+			return fixup_free_igp_null(param, 1);
+		case 3:
+			return fixup_free_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
 int fixup_sii(void **param, int param_no)
 {
 	switch(param_no) {
@@ -1025,6 +1066,174 @@ int fixup_free_ssii(void **param, int param_no)
 		case 3:
 		case 4:
 			return fixup_free_igp_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_isi(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 3:
+			return fixup_igp_null(param, 1);
+		case 2:
+			return fixup_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_free_isi(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 3:
+			return fixup_free_igp_null(param, 1);
+		case 2:
+			return fixup_free_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_iss(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+			return fixup_igp_null(param, 1);
+		case 2:
+		case 3:
+			return fixup_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_free_iss(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+			return fixup_free_igp_null(param, 1);
+		case 2:
+		case 3:
+			return fixup_free_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_iiss(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 2:
+			return fixup_igp_null(param, 1);
+		case 3:
+		case 4:
+			return fixup_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_free_iiss(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 2:
+			return fixup_free_igp_null(param, 1);
+		case 3:
+		case 4:
+			return fixup_free_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_isii(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 3:
+		case 4:
+			return fixup_igp_null(param, 1);
+		case 2:
+			return fixup_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_free_isii(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 3:
+		case 4:
+			return fixup_free_igp_null(param, 1);
+		case 2:
+			return fixup_free_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_isiii(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 3:
+		case 4:
+		case 5:
+			return fixup_igp_null(param, 1);
+		case 2:
+			return fixup_spve_null(param, 1);
+		default:
+			return E_UNSPEC;
+	}
+}
+
+/**
+ *
+ */
+int fixup_free_isiii(void **param, int param_no)
+{
+	switch(param_no) {
+		case 1:
+		case 3:
+		case 4:
+		case 5:
+			return fixup_free_igp_null(param, 1);
+		case 2:
+			return fixup_free_spve_null(param, 1);
 		default:
 			return E_UNSPEC;
 	}

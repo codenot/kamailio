@@ -9,6 +9,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -71,6 +73,7 @@ int goto_on_local_req = -1; /* default disabled */
 static char from_tag[FROM_TAG_LEN + 1];
 
 extern str tm_event_callback;
+extern str tm_evcb_local_ack_sent;
 /*
  * Initialize UAC
  */
@@ -235,8 +238,8 @@ static inline int t_build_msg_from_buf(struct sip_msg *msg, char *buf,
 }
 
 #ifdef WITH_EVENT_LOCAL_REQUEST
-static inline int t_run_local_req(char **buf, int *buf_len, uac_req_t *uac_r,
-		struct cell *new_cell, struct retr_buf *request)
+static inline int t_run_local_req(char **buf, int *buf_len, int buf_offset,
+		uac_req_t *uac_r, struct cell *new_cell, struct retr_buf *request)
 {
 	struct sip_msg lreq = {0};
 	struct onsend_info onsnd_info;
@@ -244,6 +247,7 @@ static inline int t_run_local_req(char **buf, int *buf_len, uac_req_t *uac_r,
 	int sflag_bk;
 	char *buf1;
 	int buf_len1;
+	char *buf2;
 	int backup_route_type;
 	struct cell *backup_t;
 	int backup_branch;
@@ -355,30 +359,76 @@ static inline int t_run_local_req(char **buf, int *buf_len, uac_req_t *uac_r,
 			request->dst.proto = lreq.force_send_socket->proto;
 		}
 
-		LM_DBG("apply new updates with Via to sip msg\n");
-		buf1 = build_req_buf_from_sip_req(&lreq, (unsigned int *)&buf_len1,
-				&request->dst, BUILD_NEW_LOCAL_VIA | BUILD_IN_SHM);
-		if(likely(buf1)) {
-			shm_free(*buf);
-			*buf = buf1;
-			*buf_len = buf_len1;
-			/* a possible change of the method is not handled! */
-			refresh_shortcuts = 1;
-		}
-
-	} else {
-	normal_update:
-		if(unlikely(lreq.add_rm || lreq.body_lumps || lreq.new_uri.s)) {
-			LM_DBG("apply new updates without Via to sip msg\n");
+		if(buf_offset == 0) {
+			LM_DBG("apply new updates with Via to sip msg\n");
 			buf1 = build_req_buf_from_sip_req(&lreq, (unsigned int *)&buf_len1,
-					&request->dst,
-					BUILD_NO_LOCAL_VIA | BUILD_NO_VIA1_UPDATE | BUILD_IN_SHM);
+					&request->dst, BUILD_NEW_LOCAL_VIA | BUILD_IN_SHM, NULL);
 			if(likely(buf1)) {
 				shm_free(*buf);
 				*buf = buf1;
 				*buf_len = buf_len1;
 				/* a possible change of the method is not handled! */
 				refresh_shortcuts = 1;
+			}
+		} else {
+			LM_DBG("apply new updates with Via to sip msg, preserving "
+				   "prefix\n");
+			buf1 = build_req_buf_from_sip_req(&lreq, (unsigned int *)&buf_len1,
+					&request->dst, BUILD_NEW_LOCAL_VIA, NULL);
+			if(likely(buf1)) {
+				buf2 = shm_malloc(buf_offset + buf_len1);
+				if(unlikely(!buf2)) {
+					SHM_MEM_ERROR_FMT("required (%u)\n", buf_offset + buf_len1);
+					pkg_free(buf1);
+					goto clean;
+				}
+				memcpy(buf2, *buf - buf_offset, buf_offset);
+				memcpy(buf2 + buf_offset, buf1, buf_len1);
+				shm_free(*buf - buf_offset);
+				pkg_free(buf1);
+				*buf = buf2 + buf_offset;
+				*buf_len = buf_len1;
+			}
+		}
+
+
+	} else {
+	normal_update:
+		if(unlikely(lreq.add_rm || lreq.body_lumps || lreq.new_uri.s)) {
+			if(buf_offset == 0) {
+				LM_DBG("apply new updates without Via to sip msg\n");
+				buf1 = build_req_buf_from_sip_req(&lreq,
+						(unsigned int *)&buf_len1, &request->dst,
+						BUILD_NO_LOCAL_VIA | BUILD_NO_VIA1_UPDATE
+								| BUILD_IN_SHM,
+						NULL);
+				if(likely(buf1)) {
+					shm_free(*buf);
+					*buf = buf1;
+					*buf_len = buf_len1;
+					/* a possible change of the method is not handled! */
+					refresh_shortcuts = 1;
+				}
+			} else {
+				LM_DBG("apply new updates without Via to sip msg, preserving "
+					   "prefix\n");
+				buf1 = build_req_buf_from_sip_req(&lreq,
+						(unsigned int *)&buf_len1, &request->dst,
+						BUILD_NO_LOCAL_VIA | BUILD_NO_VIA1_UPDATE, NULL);
+				if(likely(buf1)) {
+					buf2 = shm_malloc(buf_offset + buf_len1);
+					if(unlikely(!buf2)) {
+						SHM_MEM_ERROR_FMT(
+								"required (%u)\n", buf_offset + buf_len1);
+						pkg_free(buf1);
+						goto clean;
+					}
+					memcpy(buf2, *buf - buf_offset, buf_offset);
+					memcpy(buf2 + buf_offset, buf1, buf_len1);
+					shm_free(*buf - buf_offset);
+					*buf = buf2 + buf_offset;
+					*buf_len = buf_len1;
+				}
 			}
 		}
 	}
@@ -449,11 +499,11 @@ static inline int t_uac_prepare(
 		/* if err's returned, the message is incorrect */
 		goto error3;
 
-	if(!uac_r->dialog->loc_seq.is_set) {
+	if(uac_r->dialog->loc_seq.is_set == DLG_SEQ_VALINIT) {
 		/* this is the first request in the dialog,
 		set cseq to default value now - Miklos */
 		uac_r->dialog->loc_seq.value = DEFAULT_CSEQ;
-		uac_r->dialog->loc_seq.is_set = 1;
+		uac_r->dialog->loc_seq.is_set = DLG_SEQ_VALSET;
 	}
 
 	/* build cell sets X/AVP lists to new transaction structure
@@ -515,8 +565,12 @@ static inline int t_uac_prepare(
 	 * we can't call init_new_t() because we don't have a sip msg
 	 * => we'll ignore t_set_fr() or avp timer value and will use directly the
 	 * module params fr_inv_timer and fr_timer -- andrei */
-	new_cell->fr_timeout = cfg_get(tm, tm_cfg, fr_timeout);
-	new_cell->fr_inv_timeout = cfg_get(tm, tm_cfg, fr_inv_timeout);
+	new_cell->fr_timeout = (uac_r->fr_timeout > 0)
+								   ? uac_r->fr_timeout
+								   : cfg_get(tm, tm_cfg, fr_timeout);
+	new_cell->fr_inv_timeout = (uac_r->fr_inv_timeout > 0)
+									   ? uac_r->fr_inv_timeout
+									   : cfg_get(tm, tm_cfg, fr_inv_timeout);
 	new_cell->end_of_life = get_ticks_raw() + lifetime;
 	/* same as above for retransmission intervals */
 	new_cell->rt_t1_timeout_ms = cfg_get(tm, tm_cfg, rt_t1_timeout_ms);
@@ -557,7 +611,7 @@ static inline int t_uac_prepare(
 #ifdef WITH_EVENT_LOCAL_REQUEST
 	if(unlikely(goto_on_local_req >= 0 || tm_event_callback.len > 0)) {
 		refresh_shortcuts =
-				t_run_local_req(&buf, &buf_len, uac_r, new_cell, request);
+				t_run_local_req(&buf, &buf_len, 0, uac_r, new_cell, request);
 		if(unlikely(refresh_shortcuts == E_DROP)) {
 			shm_free(buf);
 			ret = E_DROP;
@@ -623,11 +677,12 @@ static inline int t_uac_prepare(
 #ifdef DIALOG_CALLBACKS
 	run_trans_dlg_callbacks(uac_r->dialog, new_cell, request);
 #endif /* DIALOG_CALLBACKS */
-	if(dst_req)
+	if(dst_req != NULL) {
 		*dst_req = request;
-	if(dst_cell)
+	}
+	if(dst_cell != NULL) {
 		*dst_cell = new_cell;
-	else if(is_ack && dst_req == 0) {
+	} else if(is_ack && dst_req == NULL) {
 		free_cell(new_cell);
 	}
 
@@ -675,7 +730,9 @@ int prepare_req_within(uac_req_t *uac_r, struct retr_buf **dst_req)
 		goto send;
 	if((uac_r->method->len == 6) && (!memcmp("CANCEL", uac_r->method->s, 6)))
 		goto send;
-	uac_r->dialog->loc_seq.value++; /* Increment CSeq */
+	if(uac_r->dialog->loc_seq.is_set != DLG_SEQ_VALNEW) {
+		uac_r->dialog->loc_seq.value++; /* Increment CSeq */
+	}
 send:
 	ret = t_uac_prepare(uac_r, dst_req, 0);
 
@@ -699,6 +756,7 @@ static inline int send_prepared_request_impl(
 	struct ua_client *uac;
 	struct ip_addr ip; /* logging */
 	int ret;
+	int osnd;
 
 	t = request->my_T;
 	uac = &t->uac[branch];
@@ -715,10 +773,12 @@ static inline int send_prepared_request_impl(
 	LM_DBG("uac: %p  branch: %d  to %s:%d\n", uac, branch, ip_addr2a(&ip),
 			su_getport(&uac->request.dst.to));
 
-	if(run_onsend(p_msg, &uac->request.dst, uac->request.buffer,
-			   uac->request.buffer_len)
-			== 0) {
-		uac->last_received = 408;
+	osnd = run_onsend(p_msg, &uac->request.dst, uac->request.buffer,
+			uac->request.buffer_len);
+	t_uas_request_clean_parsed(t);
+
+	if(osnd == 0) {
+		uac->last_received = _tm_reply_408_code;
 		su2ip_addr(&ip, &uac->request.dst.to);
 		LM_DBG("onsend_route dropped msg. to %s:%d (%d)\n", ip_addr2a(&ip),
 				su_getport(&uac->request.dst.to), uac->request.dst.proto);
@@ -821,6 +881,9 @@ struct retr_buf *local_ack_rb(sip_msg_t *rpl_2xx, struct cell *trans,
 	unsigned int buf_len;
 	char *buffer;
 	struct dest_info dst;
+	dlg_t *dlg;
+	uac_req_t uac_req;
+	str method;
 
 	buf_len = (unsigned)sizeof(struct retr_buf);
 	buffer = build_dlg_ack(rpl_2xx, trans, branch, hdrs, body, &buf_len, &dst);
@@ -830,10 +893,12 @@ struct retr_buf *local_ack_rb(sip_msg_t *rpl_2xx, struct cell *trans,
 		}
 		return 0;
 	}
+
 	/* 'buffer' now points into a contiguous chunk of memory with enough
 	 * room to hold both the retr. buffer and the string raw buffer: it
 	 * points to the beginning of the string buffer; we iterate back to get
 	 * the beginning of the space for the retr. buffer. */
+
 	lack = &((struct retr_buf *)buffer)[-1];
 	lack->buffer = buffer;
 	lack->buffer_len = buf_len;
@@ -843,6 +908,42 @@ struct retr_buf *local_ack_rb(sip_msg_t *rpl_2xx, struct cell *trans,
 	/* TODO: need next 2? */
 	lack->rbtype = TYPE_LOCAL_ACK;
 	lack->my_T = trans;
+
+#ifdef WITH_EVENT_LOCAL_REQUEST
+	dlg = (dlg_t *)shm_malloc(sizeof(dlg_t));
+	if(dlg == 0) {
+		SHM_MEM_ERROR_FMT("required (%lu)\n", sizeof(dlg_t));
+		return NULL;
+	}
+	memset(dlg, 0, sizeof(dlg_t));
+	dlg->state = DLG_NEW;
+	if(dlg_response_uac(dlg, rpl_2xx, IS_NOT_TARGET_REFRESH) < 0) {
+		LM_ERR("failed to create new dialog\n");
+		shm_free(buffer);
+		return NULL;
+	}
+	dlg->send_sock = dst.send_sock;
+
+	/* Clear everything */
+	memset(&uac_req, 0, sizeof(uac_req));
+	method.s = ACK;
+	method.len = ACK_LEN;
+	uac_req.method = &method;
+	uac_req.body = body;
+	uac_req.dialog = dlg;
+
+	t_run_local_req(&buffer, (int *)&buf_len, (unsigned)sizeof(struct retr_buf),
+			&uac_req, trans, lack);
+
+	/* t_local_run_req could have changed the buffer, if so we need to update
+	 * lack just in case
+	 */
+	lack = &((struct retr_buf *)buffer)[-1];
+	lack->buffer = buffer;
+	lack->buffer_len = buf_len;
+
+	free_dlg(dlg);
+#endif
 
 	return lack;
 }
@@ -855,6 +956,46 @@ void free_local_ack(struct retr_buf *lack)
 void free_local_ack_unsafe(struct retr_buf *lack)
 {
 	shm_free_unsafe(lack);
+}
+
+int uac_evrt_local_ack_sent(sip_msg_t *rpl)
+{
+	int route_no;
+	run_act_ctx_t ctx;
+	int rtb;
+	str evname = str_init("tm:local-ack-sent");
+	sr_kemi_eng_t *keng = NULL;
+
+	route_no = route_lookup(&event_rt, "tm:local-ack-sent");
+	if(route_no >= 0) {
+		if(event_rt.rlist[route_no] == 0) {
+			LM_WARN("event_route[tm:local-ack-sent] is empty\n");
+			return -1;
+		}
+	} else {
+		keng = sr_kemi_eng_get();
+		if(keng == NULL || tm_evcb_local_ack_sent.len <= 0) {
+			LM_DBG("event route not defined and no kemi engine\n");
+			return -2;
+		}
+	}
+
+	rtb = get_route_type();
+	set_route_type(EVENT_ROUTE);
+	init_run_actions_ctx(&ctx);
+	if(route_no >= 0) {
+		run_top_route(event_rt.rlist[route_no], rpl, &ctx);
+	} else {
+		if(sr_kemi_ctx_route(keng, &ctx, rpl, EVENT_ROUTE,
+				   &tm_evcb_local_ack_sent, &evname)
+				< 0) {
+			LM_ERR("error running event route kemi callback\n");
+			return -1;
+		}
+	}
+	set_route_type(rtb);
+
+	return 0;
 }
 
 /**
@@ -935,6 +1076,7 @@ int ack_local_uac(struct cell *trans, str *hdrs, str *body)
 				TMCB_LOCAL_F, 0 /* branch */, TYPE_LOCAL_ACK);
 		run_trans_callbacks_off_params(
 				TMCB_REQUEST_SENT, trans, &onsend_params);
+		uac_evrt_local_ack_sent(trans->uac[0].reply);
 	}
 
 	ret = 0;
@@ -1086,6 +1228,7 @@ int request(uac_req_t *uac_r, str *ruri, str *to, str *from, str *next_hop)
 	str callid, fromtag;
 	dlg_t *dialog;
 	int res;
+	unsigned int cseqno;
 
 	if(check_params(uac_r, to, from) < 0)
 		goto err;
@@ -1094,9 +1237,14 @@ int request(uac_req_t *uac_r, str *ruri, str *to, str *from, str *next_hop)
 		generate_callid(&callid);
 	else
 		callid = *uac_r->callid;
-	generate_fromtag(&fromtag, &callid, ruri);
+	cseqno = (uac_r->cseqno > 0) ? uac_r->cseqno : DEFAULT_CSEQ;
+	if(uac_r->fromtag == NULL || uac_r->fromtag->len <= 0) {
+		generate_fromtag(&fromtag, &callid, ruri);
+	} else {
+		fromtag = *uac_r->fromtag;
+	}
 
-	if(new_dlg_uac(&callid, &fromtag, DEFAULT_CSEQ, from, to, &dialog) < 0) {
+	if(new_dlg_uac(&callid, &fromtag, cseqno, from, to, &dialog) < 0) {
 		LM_ERR("Error while creating temporary dialog\n");
 		goto err;
 	}

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -95,6 +97,7 @@
 
 #include "tcp_info.h"
 #include "tcp_options.h"
+#include "tcp_mtops.h"
 #include "ut.h"
 #include "events.h"
 #include "cfg/cfg_struct.h"
@@ -113,7 +116,10 @@
 #define TCP_PASS_NEW_CONNECTION_ON_DATA /* don't pass a new connection
 										   immediately to a child, wait for
 										   some data on it first */
+#ifndef TCP_LISTEN_BACKLOG
 #define TCP_LISTEN_BACKLOG 1024
+#endif
+
 #define SEND_FD_QUEUE /* queue send fd requests on EAGAIN, instead of sending
 							them immediately */
 #define TCP_CHILD_NON_BLOCKING
@@ -160,15 +166,15 @@ struct fd_cache_entry
 static struct fd_cache_entry fd_cache[TCP_FD_CACHE_SIZE];
 #endif /* TCP_FD_CACHE */
 
-static int is_tcp_main = 0;
-
+static int _is_tcp_main = 0;
 
 enum poll_types tcp_poll_method = 0; /* by default choose the best method */
 int tcp_main_max_fd_no = 0;
 int tcp_max_connections = DEFAULT_TCP_MAX_CONNECTIONS;
 int tls_max_connections = DEFAULT_TLS_MAX_CONNECTIONS;
 int tcp_accept_unique = 0;
-
+int ksr_tcp_main_threads = 0;
+int ksr_tcp_listen_backlog = TCP_LISTEN_BACKLOG;
 int tcp_connection_match = TCPCONN_MATCH_DEFAULT;
 
 static union sockaddr_union tcp_source_ipv4_addr; /* saved bind/srv v4 addr. */
@@ -211,6 +217,14 @@ static ticks_t tcpconn_main_timeout(ticks_t, struct timer_ln *, void *);
 inline static int _tcpconn_add_alias_unsafe(struct tcp_connection *c, int port,
 		struct ip_addr *l_ip, int l_port, int flags);
 
+
+/**
+ *
+ */
+int is_tcp_main(void)
+{
+	return _is_tcp_main;
+}
 
 /* sets source address used when opening new sockets and no source is specified
  *  (by default the address is choosen by the kernel)
@@ -347,6 +361,17 @@ static int init_sock_opt(int s, int af)
 				< 0) {
 			LM_WARN("failed to set maximum LINGER2 timeout: %s\n",
 					strerror(errno));
+		}
+	}
+#endif
+#ifdef HAVE_TCP_USER_TIMEOUT
+	if((optval = TICKS_TO_S(cfg_get(tcp, tcp_cfg, send_timeout)))) {
+		optval *= 1000;
+		if(setsockopt(s, IPPROTO_TCP, TCP_USER_TIMEOUT, &optval, sizeof(optval))
+				< 0) {
+			LM_WARN("failed to set TCP_USER_TIMEOUT: %s\n", strerror(errno));
+		} else {
+			LM_DBG("Set TCP_USER_TIMEOUT=%d ms\n", optval);
 		}
 	}
 #endif
@@ -674,7 +699,7 @@ inline static int _wbufq_add(
 		q->wr_timeout = get_ticks_raw()
 						+ ((c->state == S_CONN_CONNECT)
 										? S_TO_TICKS(cfg_get(tcp, tcp_cfg,
-												connect_timeout_s))
+												  connect_timeout_s))
 										: cfg_get(tcp, tcp_cfg, send_timeout));
 	} else {
 		wb = q->last;
@@ -1227,7 +1252,9 @@ struct tcp_connection *tcpconn_new(int sock, union sockaddr_union *su,
 	atomic_set(&c->refcnt, 0);
 	local_timer_init(&c->timer, tcpconn_main_timeout, c, 0);
 
-	if(unlikely(ksr_tcp_accept_haproxy && state == S_CONN_ACCEPT)) {
+	if(unlikely((ksr_tcp_accept_haproxy
+						|| (ksr_tcp_accept_protocols & KSR_TCPAP_HAPROXY))
+				&& state == S_CONN_ACCEPT)) {
 		ret = tcpconn_read_haproxy(c);
 		if(ret == -1) {
 			LM_ERR("invalid PROXY protocol header\n");
@@ -1288,7 +1315,7 @@ inline static int find_listening_sock_info(
 			if(setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (void *)&optval,
 					   sizeof(optval))
 					== -1) {
-				LM_ERR("setsockopt SO_REUSEADDR %s\n", strerror(errno));
+				LM_NOTICE("setsockopt SO_REUSEADDR [%s]\n", strerror(errno));
 				/* continue, not critical */
 			}
 #endif
@@ -1297,19 +1324,19 @@ inline static int find_listening_sock_info(
 			if(setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (void *)&optval,
 					   sizeof(optval))
 					== -1) {
-				LM_ERR("setsockopt SO_REUSEPORT %s\n", strerror(errno));
+				LM_NOTICE("setsockopt SO_REUSEPORT [%s]\n", strerror(errno));
 				/* continue, not critical */
 			}
 #endif
 			if(unlikely(bind(s, &si->su.s, sockaddru_len(si->su)) != 0)) {
-				LM_WARN("binding to source address %s failed: %s [%d]\n",
+				LM_DBG("binding to source address %s failed: [%s] [%d]\n",
 						su2a(&si->su, sizeof(si->su)), strerror(errno), errno);
 				return -1;
 			}
 		}
 	} else {
 		if(unlikely(bind(s, &(*from)->s, sockaddru_len(**from)) != 0)) {
-			LM_WARN("binding to source address %s failed: %s [%d]\n",
+			LM_DBG("binding to source address %s failed: [%s] [%d]\n",
 					su2a(&si->su, sizeof(si->su)), strerror(errno), errno);
 			return -1;
 		}
@@ -1330,6 +1357,7 @@ inline static int tcp_do_connect(union sockaddr_union *server,
 	union sockaddr_union my_name;
 	socklen_t my_name_len;
 	struct ip_addr ip;
+	unsigned short port;
 #ifdef TCP_ASYNC
 	int n;
 #endif /* TCP_ASYNC */
@@ -1435,14 +1463,19 @@ inline static int tcp_do_connect(union sockaddr_union *server,
 	from = &my_name; /* update from with the real "from" address */
 	su2ip_addr(&ip, &my_name);
 find_socket:
+#ifdef SO_REUSEPORT
+	port = cfg_get(tcp, tcp_cfg, reuse_port) ? su_getport(from) : 0;
+#else
+	port = 0;
+#endif
 #ifdef USE_TLS
 	if(unlikely(type == PROTO_TLS)) {
-		*res_si = find_si(&ip, 0, PROTO_TLS);
+		*res_si = find_si(&ip, port, PROTO_TLS);
 	} else {
-		*res_si = find_si(&ip, 0, PROTO_TCP);
+		*res_si = find_si(&ip, port, PROTO_TCP);
 	}
 #else
-	*res_si = find_si(&ip, 0, PROTO_TCP);
+	*res_si = find_si(&ip, port, PROTO_TCP);
 #endif
 
 	if(unlikely(*res_si == 0)) {
@@ -1737,7 +1770,8 @@ struct tcp_connection *_tcpconn_find(int id, struct ip_addr *ip, int port,
 			print_ip("ip=", &a->parent->rcv.src_ip, "\n");
 #endif
 			if((a->parent->state != S_CONN_BAD) && (port == a->port)
-					&& ((l_port == 0) || (l_port == a->parent->rcv.dst_port))
+					&& ((l_port == 0) || (l_port == a->parent->rcv.dst_port)
+							|| (l_port == a->parent->cinfo.dst_port))
 					&& (ip_addr_cmp(ip, &a->parent->rcv.src_ip))
 					&& (is_local_ip_any
 							|| ip_addr_cmp(l_ip, &a->parent->rcv.dst_ip)
@@ -1745,6 +1779,12 @@ struct tcp_connection *_tcpconn_find(int id, struct ip_addr *ip, int port,
 					&& (proto == PROTO_NONE || a->parent->rcv.proto == proto)) {
 				LM_DBG("found connection by peer address (id: %d)\n",
 						a->parent->id);
+
+#ifdef USE_TLS
+				if(tls_connection_match_domain && proto == PROTO_TLS
+						&& !tls_hook_call(match_domain, 1, a->parent, ip, port))
+					continue;
+#endif
 				return a->parent;
 			}
 		}
@@ -1864,6 +1904,14 @@ inline static int _tcpconn_add_alias_unsafe(struct tcp_connection *c, int port,
 							|| ip_addr_cmp(&a->parent->rcv.dst_ip, l_ip))) {
 				/* found */
 				if(unlikely(a->parent != c)) {
+#ifdef USE_TLS
+					if(tls_connection_match_domain && c->type == PROTO_TLS
+							&& a->parent->type == PROTO_TLS
+							&& !tls_hook_call(
+									match_connections_domain, 1, c, a->parent))
+						continue;
+#endif
+
 					if(flags & TCP_ALIAS_FORCE_ADD)
 						/* still have to walk the whole list to check if
 						 * the alias was not already added */
@@ -3145,6 +3193,13 @@ int tcp_init(struct socket_info *sock_info)
 #endif
 
 	addr = &sock_info->su;
+	if((addr->s.sa_family == AF_INET6)
+			&& (sr_bind_ipv6_link_local & KSR_IPV6_LINK_LOCAL_SKIP)
+			&& IN6_IS_ADDR_LINKLOCAL(&addr->sin6.sin6_addr)) {
+		LM_DBG("skip binding on %s (bind mode: %d)\n", sock_info->address_str.s,
+				sr_bind_ipv6_link_local);
+		return 0;
+	}
 	/* sock_info->proto=PROTO_TCP; */
 	if(init_su(addr, &sock_info->address, sock_info->port_no) < 0) {
 		LM_ERR("could no init sockaddr_union\n");
@@ -3196,6 +3251,23 @@ int tcp_init(struct socket_info *sock_info)
 	}
 #endif
 
+#if defined(__OS_linux)
+	if(sock_info->vrfinfo.name.s != NULL && sock_info->vrfinfo.name.len > 0) {
+		if(setsockopt(sock_info->socket, SOL_SOCKET, SO_BINDTODEVICE,
+				   sock_info->vrfinfo.name.s, sock_info->vrfinfo.name.len)
+				== -1) {
+			LM_ERR("setsockopt SO_BINDTODEVICE on %.*s failed: %s\n",
+					STR_FMT(&sock_info->vrfinfo.name), strerror(errno));
+			goto error;
+		}
+	}
+#else
+	if(sock_info->vrfinfo.name.s != NULL && sock_info->vrfinfo.name.len > 0) {
+		LM_WARN("VRF only supported on linux, skip SO_BINDTODEVICE for %.*s\n",
+				STR_FMT(&sock_info->vrfinfo.name));
+	}
+#endif
+
 	/* tos */
 	optval = tos;
 	if(sock_info->address.af == AF_INET) {
@@ -3212,8 +3284,9 @@ int tcp_init(struct socket_info *sock_info)
 			LM_WARN("setsockopt v6 tos: %s (%d)\n", strerror(errno), tos);
 			/* continue since this is not critical */
 		}
-		if(sr_bind_ipv6_link_local != 0) {
-			LM_INFO("setting scope of %s\n", sock_info->address_str.s);
+		if(sr_bind_ipv6_link_local & KSR_IPV6_LINK_LOCAL_BIND) {
+			LM_INFO("setting scope of %s (bind mode: %d)\n",
+					sock_info->address_str.s, sr_bind_ipv6_link_local);
 			addr->sin6.sin6_scope_id =
 					ipv6_get_netif_scope(sock_info->address_str.s);
 		}
@@ -3276,12 +3349,18 @@ int tcp_init(struct socket_info *sock_info)
 	}
 #endif
 	if(bind(sock_info->socket, &addr->s, sockaddru_len(*addr)) == -1) {
-		LM_ERR("bind(%x, %p, %d) on %s:%d : %s\n", sock_info->socket, &addr->s,
-				(unsigned)sockaddru_len(*addr), sock_info->address_str.s,
-				sock_info->port_no, strerror(errno));
+		LM_ERR("bind(%x, %p, %d) on [%s]:%d : (%d / %s)\n", sock_info->socket,
+				&addr->s, (unsigned)sockaddru_len(*addr),
+				sock_info->address_str.s, sock_info->port_no, errno,
+				strerror(errno));
+		if(addr->s.sa_family == AF_INET6) {
+			LM_ERR("might be caused by using a link local address, is "
+				   "'bind_ipv6_link_local' set (now: %d)?\n",
+					sr_bind_ipv6_link_local);
+		}
 		goto error;
 	}
-	if(listen(sock_info->socket, TCP_LISTEN_BACKLOG) == -1) {
+	if(listen(sock_info->socket, ksr_tcp_listen_backlog) == -1) {
 		LM_ERR("listen(%x, %p, %d) on %s: %s\n", sock_info->socket, &addr->s,
 				(unsigned)sockaddru_len(*addr), sock_info->address_str.s,
 				strerror(errno));
@@ -4382,8 +4461,11 @@ inline static int send2child(struct tcp_connection *tcpconn)
 	   even replaced by another one with the same number) so it
 	   must not be sent to a reader anymore */
 	if(unlikely(tcpconn->state == S_CONN_BAD
-				|| (tcpconn->flags & F_CONN_FD_CLOSED)))
+				|| (tcpconn->flags & F_CONN_FD_CLOSED))) {
+		tcp_children[idx].busy--;
+		tcp_children[idx].n_reqs--;
 		return -1;
+	}
 #ifdef SEND_FD_QUEUE
 	/* if queue full, try to queue the io */
 	if(unlikely(send_fd(tcp_children[idx].unix_sock, &tcpconn, sizeof(tcpconn),
@@ -4398,11 +4480,15 @@ inline static int send2child(struct tcp_connection *tcpconn)
 					   &send2child_q, tcp_children[idx].unix_sock, tcpconn)
 					!= 0) {
 				LM_ERR("queue send op. failed\n");
+				tcp_children[idx].busy--;
+				tcp_children[idx].n_reqs--;
 				return -1;
 			}
 		} else {
 			LM_ERR("send_fd failed for %p (flags 0x%0x), fd %d\n", tcpconn,
 					tcpconn->flags, tcpconn->s);
+			tcp_children[idx].busy--;
+			tcp_children[idx].n_reqs--;
 			return -1;
 		}
 	}
@@ -4412,6 +4498,8 @@ inline static int send2child(struct tcp_connection *tcpconn)
 				<= 0)) {
 		LM_ERR("send_fd failed for %p (flags 0x%0x), fd %d\n", tcpconn,
 				tcpconn->flags, tcpconn->s);
+		tcp_children[idx].busy--;
+		tcp_children[idx].n_reqs--;
 		return -1;
 	}
 #endif
@@ -4880,7 +4968,7 @@ static inline void tcpconn_destroy_all(void)
 		c = tcpconn_id_hash[h];
 		while(c) {
 			next = c->id_next;
-			if(is_tcp_main) {
+			if(_is_tcp_main) {
 				/* we cannot close or remove the fd if we are not in the
 					 * tcp main proc.*/
 				if((c->flags & F_CONN_MAIN_TIMER)) {
@@ -4925,7 +5013,7 @@ void tcp_main_loop()
 	struct socket_info *si;
 	int r;
 
-	is_tcp_main = 1; /* mark this process as tcp main */
+	_is_tcp_main = 1; /* mark this process as tcp main */
 
 	tcp_main_max_fd_no = get_max_open_fds();
 	/* init send fd queues (here because we want mem. alloc only in the tcp
@@ -4952,6 +5040,16 @@ void tcp_main_loop()
 	if(cfg_get(tcp, tcp_cfg, fd_cache))
 		tcp_fd_cache_init();
 #endif /* TCP_FD_CACHE */
+
+	if(ksr_tcp_main_threads != 0) {
+		if(ksr_tcpx_proc_list_prepare() < 0) {
+			LM_ERR("failed to prepare multi-thread processing list\n");
+			goto error;
+		}
+		LM_INFO("tcp main processing threads prepared\n");
+	} else {
+		LM_INFO("tcp main processing threads not enabled\n");
+	}
 
 	/* add all the sockets we listen on for connections */
 	for(si = tcp_listen; si; si = si->next) {
@@ -5541,9 +5639,9 @@ void tcp_timer_check_connections(unsigned int ticks, void *param)
 		if(n > 0) {
 			for(i = 0; i < n; i++) {
 				if((con = tcpconn_get(tcpidlist[i], 0, 0, 0, 0))) {
-					LM_CRIT("message processing timeout on connection id: %d "
-							"(state: %d) - "
-							"closing\n",
+					LM_DBG("message processing timeout on connection id: %d "
+						   "(state: %d) - "
+						   "closing\n",
 							tcpidlist[i], con->state);
 					mcmd[0] = (long)con;
 					mcmd[1] = CONN_EOF;

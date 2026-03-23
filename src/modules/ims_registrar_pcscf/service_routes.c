@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -27,6 +29,7 @@
 #include "../../core/parser/msg_parser.h"
 #include "../../core/data_lump.h"
 #include "../../lib/ims/ims_getters.h"
+#include "../ims_ipsec_pcscf/cmd.h"
 
 #define STR_APPEND(dst, src)                             \
 	{                                                    \
@@ -37,10 +40,13 @@
 // ID of current message
 static unsigned int current_msg_id = 0;
 // Pointer to current contact_t
-static pcontact_t *c = NULL;
+static pcontact_t *current_ct = NULL;
 
 extern usrloc_api_t ul;
+extern ipsec_pcscf_api_t ipsec_pcscf;
 extern int ignore_contact_rxport_check;
+extern int ignore_contact_rxproto_check;
+extern int trust_bottom_via;
 static str *asserted_identity;
 static str *registration_contact;
 
@@ -117,43 +123,79 @@ int checkcontact(struct sip_msg *_m, pcontact_t *c)
 {
 	int security_server_port = -1;
 	str received_host = {0, 0};
+	unsigned short received_port = 0;
+	char received_proto = 0;
 	char srcip[50];
+
+	if(trust_bottom_via) {
+		struct via_body *vb = cscf_get_last_via(_m);
+		if(vb == 0) {
+			LM_ERR("No via header in request\n");
+			return -1;
+		}
+		if(vb->received != NULL && vb->received->value.len > 0) {
+			received_host = vb->received->value;
+		} else {
+			received_host = vb->host;
+		}
+		if(vb->rport != NULL && vb->rport->value.len > 0) {
+			str2ushort(&vb->rport->value, &received_port);
+		} else {
+			received_port = vb->port;
+		}
+		// this probably doesn't matter, since IMS UEs register IPs for both
+		received_proto = vb->proto;
+	} else {
+		received_host.len = ip_addr2sbuf(&_m->rcv.src_ip, srcip, sizeof(srcip));
+		received_host.s = srcip;
+		received_port = _m->rcv.src_port;
+		received_proto = _m->rcv.proto;
+	}
 
 	LM_DBG("Port %d (search %d), Proto %d (search %d), reg_state %s (search "
 		   "%s)\n",
-			c->received_port, _m->rcv.src_port, c->received_proto,
-			_m->rcv.proto, reg_state_to_string(c->reg_state),
+			c->received_port, received_port, c->received_proto, received_proto,
+			reg_state_to_string(c->reg_state),
 			reg_state_to_string(PCONTACT_REGISTERED));
 
-	if(c->security) {
-		switch(c->security->type) {
-			case SECURITY_IPSEC:
-				security_server_port = c->security->data.ipsec->port_uc;
-				break;
-			case SECURITY_TLS:
-			case SECURITY_NONE:
-				break;
+
+	if(ipsec_pcscf.ipsec_on_expire == NULL) {
+		LM_DBG("ims_ipsec_pcscf module not loaded - skipping port-uc checks\n");
+	} else if(!ignore_contact_rxport_check) {
+		if(c->security) {
+			switch(c->security->type) {
+				case SECURITY_IPSEC:
+					security_server_port = c->security->data.ipsec->port_uc;
+					break;
+				case SECURITY_TLS:
+				case SECURITY_NONE:
+					break;
+			}
+		} else if(c->security_temp) {
+			switch(c->security_temp->type) {
+				case SECURITY_IPSEC:
+					security_server_port =
+							c->security_temp->data.ipsec->port_uc;
+					break;
+				case SECURITY_TLS:
+				case SECURITY_NONE:
+					break;
+			}
 		}
-	} else if(c->security_temp) {
-		switch(c->security_temp->type) {
-			case SECURITY_IPSEC:
-				security_server_port = c->security_temp->data.ipsec->port_uc;
-				break;
-			case SECURITY_TLS:
-			case SECURITY_NONE:
-				break;
+
+		if(c->received_port != received_port
+				&& security_server_port != received_port) {
+			LM_DBG("check contact failed - port-uc %d is neither contact "
+				   "received_port %d, nor message received port %d\n",
+					security_server_port, c->received_port, _m->rcv.src_port);
+			return 1;
 		}
 	}
 
 	if((ignore_reg_state || (c->reg_state == PCONTACT_REGISTERED))
-			&& (ignore_contact_rxport_check
-					|| (c->received_port == _m->rcv.src_port)
-					|| (security_server_port == _m->rcv.src_port))
-			&& (ignore_contact_rxport_check
-					|| (c->received_proto == _m->rcv.proto))) {
+			&& (ignore_contact_rxproto_check
+					|| (c->received_proto == received_proto))) {
 
-		received_host.len = ip_addr2sbuf(&_m->rcv.src_ip, srcip, sizeof(srcip));
-		received_host.s = srcip;
 		LM_DBG("Received host len %d (search %d)\n", c->received_host.len,
 				received_host.len);
 		// Then check the length:
@@ -188,7 +230,7 @@ pcontact_t *getContactP(struct sip_msg *_m, udomain_t *_d,
 	pcontact_info_t search_ci;
 	str received_host = {0, 0};
 	char srcip[50];
-	struct via_body *vb;
+	struct via_body *vb = NULL;
 	unsigned short port, proto;
 	str host;
 	sip_uri_t contact_uri;
@@ -199,7 +241,7 @@ pcontact_t *getContactP(struct sip_msg *_m, udomain_t *_d,
 	b = cscf_parse_contacts(_m);
 
 	if(_m->first_line.type == SIP_REPLY && _m->contact && _m->contact->parsed
-			&& b->contacts) {
+			&& b->contacts && !trust_bottom_via) {
 		mustRetryViaSearch = 1;
 		mustRetryReceivedSearch = 1;
 		LM_DBG("This is a reply - to look for contact we favour the contact "
@@ -224,7 +266,7 @@ pcontact_t *getContactP(struct sip_msg *_m, udomain_t *_d,
 		else
 			LM_DBG("This is a request - using first via to find contact\n");
 
-		vb = cscf_get_ue_via(_m);
+		vb = trust_bottom_via ? cscf_get_last_via(_m) : cscf_get_ue_via(_m);
 		host = vb->host;
 		port = vb->port ? vb->port : 5060;
 		proto = vb->proto;
@@ -234,19 +276,46 @@ pcontact_t *getContactP(struct sip_msg *_m, udomain_t *_d,
 		   "[%d://%.*s:%d]\n",
 			proto, host.len, host.s, port);
 
-	received_host.len = ip_addr2sbuf(&_m->rcv.src_ip, srcip, sizeof(srcip));
-	received_host.s = srcip;
+	if(trust_bottom_via && vb) {
+		if(vb->received != NULL && vb->received->value.len > 0) {
+			received_host = vb->received->value;
+		} else {
+			received_host = vb->host;
+		}
+	} else {
+		received_host.len = ip_addr2sbuf(&_m->rcv.src_ip, srcip, sizeof(srcip));
+		received_host.s = srcip;
+	}
+	unsigned short received_port = 0;
+	if(trust_bottom_via && vb) {
+		if(vb->rport != NULL && vb->rport->value.len > 0) {
+			received_port = atoi(vb->rport->value.s);
+		} else {
+			received_port = vb->port ? vb->port : 5060;
+		}
+	} else {
+		received_port = _m->rcv.src_port;
+	}
+	if(received_port == 0) {
+		received_port = 5060;
+	}
+	char received_proto = 0;
+	if(trust_bottom_via && vb && vb->proto) {
+		received_proto = vb->proto;
+	} else {
+		received_proto = _m->rcv.proto;
+	}
 
 	//    if (_m->id != current_msg_id) {
 	current_msg_id = _m->id;
-	c = NULL;
+	current_ct = NULL;
 	//search_ci.reg_state = PCONTACT_REGISTERED;          //we can do this because this function is always called expecting a REGISTERED contact
 	memset(&search_ci, 0, sizeof(struct pcontact_info));
 	search_ci.reg_state = reg_state;
 	search_ci.received_host.s = received_host.s;
 	search_ci.received_host.len = received_host.len;
-	search_ci.received_port = _m->rcv.src_port;
-	search_ci.received_proto = _m->rcv.proto;
+	search_ci.received_port = received_port;
+	search_ci.received_proto = received_proto;
 	search_ci.searchflag = SEARCH_RECEIVED;
 	search_ci.num_service_routes = 0;
 	if(is_registered_fallback2ip == 1) {
@@ -279,9 +348,9 @@ tryagain:
 	if(b && b->contacts) {
 		for(ct = b->contacts; ct; ct = ct->next) {
 			search_ci.aor = ct->uri;
-			if(ul.get_pcontact(_d, &search_ci, &c, 0) == 0) {
-				if(checkcontact(_m, c) != 0) {
-					c = NULL;
+			if(ul.get_pcontact(_d, &search_ci, &current_ct, 0) == 0) {
+				if(checkcontact(_m, current_ct) != 0) {
+					current_ct = NULL;
 				} else {
 					break;
 				}
@@ -291,41 +360,39 @@ tryagain:
 		LM_WARN("No contact-header found...\n");
 	}
 
-	if((c == NULL) && (is_registered_fallback2ip == 1)) {
+	if((current_ct == NULL) && (is_registered_fallback2ip == 1)) {
 		LM_INFO("Contact not found based on Contact-header, trying "
 				"IP/Port/Proto\n");
-		//			received_host.len = ip_addr2sbuf(&_m->rcv.src_ip, srcip, sizeof(srcip));
-		//			received_host.s = srcip;
 		search_ci.searchflag = SEARCH_RECEIVED;
-		if(ul.get_pcontact(_d, &search_ci, &c, 0) == 1) {
+		if(ul.get_pcontact(_d, &search_ci, &current_ct, 0) == 1) {
 			LM_DBG("No entry in usrloc for %.*s:%i (Proto %i) found!\n",
 					received_host.len, received_host.s, _m->rcv.src_port,
 					_m->rcv.proto);
 		} else {
-			if(checkcontact(_m, c) != 0) {
-				c = NULL;
+			if(checkcontact(_m, current_ct) != 0) {
+				current_ct = NULL;
 			}
 		}
 	}
 
-	if((c == NULL) && (is_registered_fallback2ip == 2)) {
+	if((current_ct == NULL) && (is_registered_fallback2ip == 2)) {
 		LM_INFO("Contact not found based on IP/Port/Proto, trying "
 				"Contact-header\n");
 		search_ci.searchflag = SEARCH_NORMAL;
-		if(ul.get_pcontact(_d, &search_ci, &c, 0) == 1) {
+		if(ul.get_pcontact(_d, &search_ci, &current_ct, 0) == 1) {
 		} else {
-			if(checkcontact(_m, c) != 0) {
-				c = NULL;
+			if(checkcontact(_m, current_ct) != 0) {
+				current_ct = NULL;
 			}
 		}
 	}
 
 	asserted_identity = NULL;
 	registration_contact = NULL;
-	if(c) {
+	if(current_ct) {
 		LM_DBG("Trying to set asserted identity field");
-		registration_contact = &c->contact_user;
-		p = c->head;
+		registration_contact = &current_ct->contact_user;
+		p = current_ct->head;
 		while(p) {
 			LM_DBG("Checking through contact users");
 			if(p->is_default == 1) {
@@ -340,17 +407,13 @@ tryagain:
 		LM_DBG("Have set the asserted_identity param to [%.*s]\n",
 				asserted_identity->len, asserted_identity->s);
 	} else {
-		LM_DBG("Asserted identity not set");
+		LM_DBG("Asserted identity not set\n");
 	}
 
-
-	//    LM_DBG("pcontact flag is [%d]\n", c->flags);
-	//    if (c && (c->flags & (1<<FLAG_READFROMDB)) != 0) {
-	//        LM_DBG("we have a contact that was read fresh from the DB....\n");
-	//    }
-	if(!c && mustRetryViaSearch) {
+	if(!current_ct && mustRetryViaSearch) {
 		LM_DBG("This is a reply so we will search using the last via once "
 			   "more...\n");
+		// if trust_bottom_via was set, we wouldn't get here, hence this remains as is.
 		vb = cscf_get_ue_via(_m);
 		search_ci.via_host = vb->host;
 		search_ci.via_port = vb->port ? vb->port : 5060;
@@ -359,7 +422,7 @@ tryagain:
 		goto tryagain;
 	}
 
-	if(!c && mustRetryReceivedSearch) {
+	if(!current_ct && mustRetryReceivedSearch) {
 		LM_DBG("This is a reply and we still don't have a match - will try src "
 			   "ip/port of message\n");
 		search_ci.via_host = received_host;
@@ -369,7 +432,7 @@ tryagain:
 		goto tryagain;
 	}
 
-	return c;
+	return current_ct;
 }
 
 /**
@@ -383,7 +446,7 @@ int check_service_routes(struct sip_msg *_m, udomain_t *_d)
 	rr_t *r;
 	char routes[MAXROUTES][MAXROUTESIZE];
 	unsigned int num_routes = 0;
-
+	pcontact_t *c = NULL;
 	struct via_body *vb;
 	unsigned short port;
 	unsigned short proto;
@@ -396,7 +459,7 @@ int check_service_routes(struct sip_msg *_m, udomain_t *_d)
 
 	//	LM_DBG("Got %i Route-Headers.\n", c->num_service_routes);
 
-	vb = cscf_get_ue_via(_m);
+	vb = trust_bottom_via ? cscf_get_last_via(_m) : cscf_get_ue_via(_m);
 	port = vb->port ? vb->port : 5060;
 	proto = vb->proto;
 
@@ -453,8 +516,7 @@ int check_service_routes(struct sip_msg *_m, udomain_t *_d)
 			for(i = 0; i < num_routes; i++) {
 				LM_DBG("route %d for checking is %s\n", i, routes[i]);
 			}
-			pcontact_t *c = getContactP(
-					_m, _d, PCONTACT_REGISTERED, routes, num_routes);
+			c = getContactP(_m, _d, PCONTACT_REGISTERED, routes, num_routes);
 			if(!c) {
 				LM_DBG("no contact found in usrloc when checking for service "
 					   "route\n");
@@ -470,8 +532,7 @@ int check_service_routes(struct sip_msg *_m, udomain_t *_d)
 			   "service-route...ignoring\n");
 		goto error;
 	}
-
-	pcontact_t *c = getContactP(_m, _d, PCONTACT_REGISTERED, 0, 0);
+	c = getContactP(_m, _d, PCONTACT_REGISTERED, 0, 0);
 	if(!c) {
 		LM_DBG("no contact found in usrloc when checking for service route\n");
 		goto error;
@@ -597,7 +658,7 @@ int force_service_routes(struct sip_msg *_m, udomain_t *_d)
 	/* we need to be sure we have seen all HFs */
 	parse_headers(_m, HDR_EOH_F, 0);
 
-	vb = cscf_get_ue_via(_m);
+	vb = trust_bottom_via ? cscf_get_last_via(_m) : cscf_get_ue_via(_m);
 	port = vb->port ? vb->port : 5060;
 	proto = vb->proto;
 
@@ -747,7 +808,7 @@ int assert_identity(struct sip_msg *_m, udomain_t *_d, str identity)
 					   | PCONTACT_REG_PENDING,
 			   0, 0)
 			!= NULL) {
-		for(p = c->head; p; p = p->next) {
+		for(p = current_ct->head; p; p = p->next) {
 			LM_DBG("Public identity: %.*s\n", p->public_identity.len,
 					p->public_identity.s);
 			/* Check length: */
@@ -845,7 +906,7 @@ int pcscf_unregister(
 	memset(&ci, 0, sizeof(struct pcontact_info));
 
 	pcontact_info_t search_ci;
-	memset(&ci, 0, sizeof(struct pcontact_info));
+	memset(&search_ci, 0, sizeof(struct pcontact_info));
 
 	sip_uri_t contact_uri;
 	if(parse_uri(uri->s, uri->len, &contact_uri) != 0) {
@@ -872,9 +933,9 @@ int pcscf_unregister(
 		ul.lock_udomain(_d, &pcontact->via_host, pcontact->via_port,
 				pcontact->via_proto);
 
-		LM_DBG("Updating contact [%.*s]: setting state to "
-			   "PCONTACT_DEREG_PENDING_PUBLISH\n",
-				pcontact->aor.len, pcontact->aor.s);
+		LM_DBG("Updating contact [%.*s]: setting state to %s\n",
+				pcontact->aor.len, pcontact->aor.s,
+				reg_state_to_string(pcontact->reg_state));
 
 		ci.reg_state = PCONTACT_DEREG_PENDING_PUBLISH;
 		ci.num_service_routes = 0;

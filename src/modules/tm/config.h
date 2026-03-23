@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -86,11 +88,17 @@
 #define CANCEL_DONE "ok -- no more pending branches"
 #define CANCELED "Request canceled"
 
+/* execute event_route[tm:local-request] for hop-by-hop messages
+1 = execute for Cancel
+2 = execute for ACK
+3 = execute for both
+*/
+#define TM_EVLREQ_CANCEL_HBH (1 << 0)
+#define TM_EVLREQ_ACK_HBH (1 << 1)
+#define TM_EVLREQ_BOTH_HBH (TM_EVLREQ_CANCEL_HBH | TM_EVLREQ_ACK_HBH) // 3
+
 /* to-tag separator for stateful processing */
 #define TM_TAG_SEPARATOR '-'
-
-/* FIFO substitution character */
-#define SUBST_CHAR '!'
 
 struct cfg_group_tm
 {

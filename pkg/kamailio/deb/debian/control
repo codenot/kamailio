@@ -5,32 +5,32 @@ Maintainer: Kamailio Admin Group <kadmin.hq@lists.kamailio.org>
 Uploaders:
  Victor Seva <vseva@debian.org>,
 Build-Depends:
- bison,
- debhelper (>= 9),
- default-libmysqlclient-dev,
- dh-systemd (>= 1.5),
- docbook-xml,
+ debhelper-compat (= 13),
+ dh-cmake,
+ dh-cmake-compat (= 1),
+ dh-sequence-cmake,
  dpkg-dev (>= 1.16.1.1),
+ bison,
+ cmake (>= 3.10),
+ default-libmysqlclient-dev,
+ docbook-xml,
+ docbook-xsl,
  erlang-dev,
  flex,
- gcj-jdk,
  libcurl4-openssl-dev,
- libdb-dev (>= 4.6.19),
  libev-dev,
  libevent-dev,
  libexpat1-dev,
- libgeoip-dev (>= 1.4.5),
  libhiredis-dev (>= 0.10.0),
  libjansson-dev,
  libjson-c-dev,
  libldap2-dev,
- liblua5.1-0-dev,
+ liblua5.5-dev,
  libmaxminddb-dev,
  libmemcached-dev,
  libmicrohttpd-dev,
  libmnl-dev,
  libmongoc-dev,
- libmono-2.0-dev [amd64 armel armhf i386 mipsel kfreebsd-amd64 kfreebsd-i386 ppc64 ppc64el s390x],
  libmosquitto-dev,
  libnats-dev,
  libncurses5-dev,
@@ -40,19 +40,21 @@ Build-Depends:
  libpq-dev,
  librabbitmq-dev,
  libradcli-dev,
+ librdkafka-dev,
  libreadline-dev,
  libsasl2-dev,
  libsctp-dev [any],
+ libsecp256k1-dev,
  libsecsipid-dev [amd64 arm64 armel armhf hurd-i386 i386 powerpc ppc64 ppc64el riscv64 s390x],
  libsnmp-dev,
  libsqlite3-dev,
  libssl-dev,
  libsystemd-dev,
  libunistring-dev,
- libval-dev,
  libwebsockets-dev,
  libwolfssl-dev,
  libxml2-dev,
+ lynx,
  openssl,
  pkg-config,
  python,
@@ -84,7 +86,6 @@ Depends:
 Replaces:
  kamailio-carrierroute-modules,
 Suggests:
- kamailio-berkeley-modules,
  kamailio-cpl-modules,
  kamailio-dbg,
  kamailio-ldap-modules,
@@ -113,8 +114,7 @@ Description: very fast, dynamic and configurable SIP server
  A C Shell like scripting language provides full control over the server's
  behaviour. It's easy to integrate Kamailio with 3rd party API's and applications
  using HTTP, AMQP, database drivers, LDAP, Radius and many other solutions.
- In addition there is support for scripting using Lua, Python, Perl, Java and
- a set of other languages using Mono.
+ In addition there is support for scripting using Lua, Python, Perl, Javascript.
  .
  Kamailio's modular architecture allows only required functionality to be loaded.
  There are over 100 modules available: WebSockets for WebRTC, authentication,
@@ -145,23 +145,6 @@ Description: very fast and configurable SIP server [debug symbols]
  .
  This package contains the debugging symbols for the Kamailio binaries and
  modules. You only need to install it if you need to debug Kamailio.
-
-Package: kamailio-geoip-modules
-Architecture: any
-Multi-Arch: same
-Pre-Depends:
- ${misc:Pre-Depends},
-Depends:
- kamailio (= ${binary:Version}),
- ${misc:Depends},
- ${shlibs:Depends},
-Description: The geoip module for the Kamailio SIP Server
- Kamailio is a very fast and flexible SIP (RFC3261)
- server. Written entirely in C, Kamailio can handle thousands calls
- per second even on low-budget hardware.
- .
- This package provides the geoip module, an extension enabling
- usage of the GeoIP API within the Kamailio configuration file.
 
 Package: kamailio-geoip2-modules
 Architecture: any
@@ -252,23 +235,6 @@ Description: The app_lua module for Kamailio Lua support
  This package provides the app_lua module, an extension allowing to
  execute embedded Lua applications within the configuration file as
  well as writing the entire configuration file in Lua.
-
-Package: kamailio-mono-modules
-Architecture: any
-Multi-Arch: same
-Pre-Depends:
- ${misc:Pre-Depends},
-Depends:
- kamailio (= ${binary:Version}),
- ${misc:Depends},
- ${shlibs:Depends},
-Description: The app_mono module for the Kamailio SIP server
- Kamailio is a very fast and flexible SIP (RFC3261)
- server. Written entirely in C, Kamailio can handle thousands calls
- per second even on low-budget hardware.
- .
- This package provides the app_mono module, an extension allowing to
- execute embedded Mono applications within the Kamailio SIP routing script.
 
 Package: kamailio-python-modules
 Architecture: any
@@ -521,42 +487,6 @@ Description: XML based extensions for Kamailio's Management Interface
  Management and Control Interface.
  - xmlops module for XPath operations in configuration file
 
-Package: kamailio-berkeley-modules
-Architecture: any
-Multi-Arch: same
-Pre-Depends:
- ${misc:Pre-Depends},
-Depends:
- db-util (>= 4.6.19),
- kamailio (= ${binary:Version}),
- ${misc:Depends},
- ${shlibs:Depends},
-Description: Berkeley database module for the Kamailio SIP server
- Kamailio is a very fast and flexible SIP (RFC3261)
- server. Written entirely in C, Kamailio can handle thousands calls
- per second even on low-budget hardware.
- .
- This package provides the Berkeley database module for Kamailio, a
- high-performance embedded database. All database tables are stored
- in files, no additional server is necessary.
-
-Package: kamailio-berkeley-bin
-Architecture: any
-Multi-Arch: foreign
-Pre-Depends:
- ${misc:Pre-Depends},
-Depends:
- ${misc:Depends},
- ${shlibs:Depends},
-Description: Berkeley database module for Kamailio - helper program
- Kamailio is a very fast and flexible SIP (RFC3261)
- server. Written entirely in C, Kamailio can handle thousands calls
- per second even on low-budget hardware.
- .
- This package provides helper modules for the Berkeley database module for
- Kamailio, a high-performance embedded DB kernel. You should normally
- install kamailio-berkeley-modules and not this package directly.
-
 Package: kamailio-ldap-modules
 Architecture: any
 Multi-Arch: same
@@ -626,24 +556,6 @@ Description: SCTP SIP transport module for the Kamailio SIP server
  .
  This package provides the SCTP SIP transport module for Kamailio.
 
-Package: kamailio-java-modules
-Architecture: any
-Multi-Arch: same
-Pre-Depends:
- ${misc:Pre-Depends},
-Depends:
- gcj-jre,
- kamailio (= ${binary:Version}),
- ${misc:Depends},
- ${shlibs:Depends},
-Description: The app_java module - JAVA support for the Kamailio SIP server
- Kamailio is a very fast and flexible SIP (RFC3261)
- server. Written entirely in C, Kamailio can handle thousands calls
- per second even on low-budget hardware.
- .
- This package provides the app_java module, an extension allowing to
- execute embedded Java applications within the Kamailio routing script.
-
 Package: kamailio-tls-modules
 Architecture: any
 Multi-Arch: same
@@ -661,7 +573,7 @@ Description: TLS support for the Kamailio SIP server (authentication, transport)
  This package provides TLS support for encrypted and authenticated
  SIP connections as well as generic TLS support for many Kamailio modules.
 
-Package: kamailio-wolftls-modules
+Package: kamailio-tls-wolfssl-modules
 Architecture: any
 Multi-Arch: same
 Pre-Depends:
@@ -710,22 +622,6 @@ Description: WebSocket module for the Kamailio SIP server
  .
  This package contains the module implementing WebSocket transport layer
  for use in SIP over WebSockets, in combination with WebRTC media sessions..
-
-Package: kamailio-dnssec-modules
-Architecture: any
-Multi-Arch: same
-Pre-Depends:
- ${misc:Pre-Depends},
-Depends:
- kamailio (= ${binary:Version}),
- ${misc:Depends},
- ${shlibs:Depends},
-Description: DNSsec support for the Kamailio SIP server
- Kamailio is a very fast and flexible SIP (RFC3261)
- server. Written entirely in C, Kamailio can handle thousands calls
- per second even on low-budget hardware.
- .
- This package provides the DNSsec module for Kamailio.
 
 Package: kamailio-autheph-modules
 Architecture: any
@@ -953,6 +849,38 @@ Description: Microhttpd module for the Kamailio SIP server
  per second even on low-budget hardware.
  .
  This package provides an embedded HTTP server using libmicrohttpd.
+
+Package: kamailio-kafka-modules
+Architecture: any
+Multi-Arch: same
+Pre-Depends:
+ ${misc:Pre-Depends},
+Depends:
+ kamailio (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: Kafka module for the Kamailio SIP server
+ Kamailio is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, Kamailio can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This package provides an embedded kafka producer using librdkafka.
+
+Package: kamailio-authblockchain-modules
+Architecture: any
+Multi-Arch: same
+Pre-Depends:
+ ${misc:Pre-Depends},
+Depends:
+ kamailio (= ${binary:Version}),
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: Blockchain related modules for the Kamailio SIP server
+ Kamailio is a very fast and flexible SIP (RFC3261)
+ server. Written entirely in C, Kamailio can handle thousands calls
+ per second even on low-budget hardware.
+ .
+ This package provides auth_web3 and auth_arnacon modules.
 
 Package: kamailio-extra-modules
 Architecture: any

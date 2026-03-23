@@ -25,6 +25,9 @@
 
 #include "../../core/pvar.h"
 
+#define EAVPI_SEND_TASK_TIMEOUT_US 0
+#define EAVPI_SEND_DATA_TIMEOUT_US 0
+
 int evapi_init_notify_sockets(void);
 
 void evapi_close_notify_sockets_child(void);
@@ -58,5 +61,7 @@ int evapi_set_tag(sip_msg_t *msg, str *stag);
 int evapi_clients_init(void);
 
 int evapi_queue_init(void);
+
+int evapi_context_init(unsigned int vlimit);
 
 #endif

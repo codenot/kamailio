@@ -43,7 +43,7 @@ extern int spiral_detected;
 /*! global variable table, in case the dialog does not exist yet */
 static struct dlg_var *_dlg_var_table = 0;
 /*! ID of the current message */
-int msg_id;
+static int _dlg_var_msg_id = 0;
 
 int dlg_cfg_cb(sip_msg_t *msg, unsigned int flags, void *cbp)
 {
@@ -158,9 +158,9 @@ struct dlg_var *get_local_varlist_pointer(
 {
 	struct dlg_var *var;
 	/* New list, delete the old one */
-	if(msg->id != msg_id) {
+	if(msg->id != _dlg_var_msg_id) {
 		free_local_varlist();
-		msg_id = msg->id;
+		_dlg_var_msg_id = msg->id;
 	}
 	var = _dlg_var_table;
 	if(clear_pointer)
@@ -197,8 +197,8 @@ int set_dlg_variable_unsafe(struct dlg_cell *dlg, str *key, str *val)
 					it_prev->next = it->next;
 				else
 					*var_list = it->next;
-				/* Set the delete-flag for the current var: */
-				it->vflags &= DLG_FLAG_DEL;
+				/* set the delete-flag for the current var */
+				it->vflags |= DLG_FLAG_DEL;
 			} else {
 				/* replace the current it with var and free the it */
 				var->next = it->next;
@@ -670,7 +670,7 @@ int pv_set_dlg_ctx(
 				if(val->rs.len < DLG_TOROUTE_SIZE
 						&& val->rs.s[val->rs.len] == '\0') {
 					_dlg_ctx.to_route = route_lookup(&main_rt, val->rs.s);
-					strcpy(_dlg_ctx.to_route_name, val->rs.s);
+					memcpy(_dlg_ctx.to_route_name, val->rs.s, val->rs.len);
 				} else {
 					_dlg_ctx.to_route = 0;
 				}
@@ -679,7 +679,7 @@ int pv_set_dlg_ctx(
 					rtp = int2str(n, &rlen);
 					if(rlen < DLG_TOROUTE_SIZE) {
 						_dlg_ctx.to_route = route_lookup(&main_rt, rtp);
-						strcpy(_dlg_ctx.to_route_name, rtp);
+						memcpy(_dlg_ctx.to_route_name, rtp, rlen);
 					} else {
 						_dlg_ctx.to_route = 0;
 					}

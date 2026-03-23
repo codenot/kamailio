@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -40,6 +42,15 @@
  * @return 0 on success.
  */
 int get_timestamp(uint64_t *ts);
+
+/**
+ * @brief Format and print timestamp according to timestamp_format parameter.
+ *
+ * @param ctx prom_ctx_t context for output buffer
+ * @param ts timestamp in milliseconds
+ * @return number of bytes written, or -1 on error
+ */
+int prom_body_timestamp_printf(prom_ctx_t *ctx, uint64_t ts);
 
 /**
  * @brief Write some data in prom_body buffer.

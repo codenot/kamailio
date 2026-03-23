@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -135,6 +137,7 @@ str cdr_skip = {NULL, 0};
 str cdr_start_str = str_init("start_time");
 str cdr_end_str = str_init("end_time");
 str cdr_duration_str = str_init("duration");
+int cdr_duration_mode = 1;
 /* name for db table to store dialog-based cdrs */
 str acc_cdrs_table = str_init("");
 
@@ -146,6 +149,7 @@ str acc_cdrs_table = str_init("");
 
 int db_flag = -1;
 int db_missed_flag = -1;
+int db_ver_check = 1;
 static char *db_extra_str = 0; /*!< db extra variables */
 struct acc_extra *db_extra = 0;
 static str db_url = {NULL, 0};		/*!< Database url */
@@ -198,42 +202,44 @@ static cmd_export_t cmds[] = {
 
 
 static param_export_t params[] = {
-	{"early_media",             INT_PARAM, &early_media             },
-	{"failed_transaction_flag", INT_PARAM, &failed_transaction_flag },
+	{"early_media",             PARAM_INT, &early_media             },
+	{"failed_transaction_flag", PARAM_INT, &failed_transaction_flag },
 	{"failed_filter",           PARAM_STRING, &failed_filter_str       },
-	{"report_ack",              INT_PARAM, &report_ack              },
-	{"report_cancels",          INT_PARAM, &report_cancels          },
+	{"report_ack",              PARAM_INT, &report_ack              },
+	{"report_cancels",          PARAM_INT, &report_cancels          },
 	{"multi_leg_info",          PARAM_STRING, &leg_info_str            },
-	{"detect_direction",        INT_PARAM, &detect_direction        },
-	{"acc_prepare_flag",        INT_PARAM, &acc_prepare_flag        },
-	{"acc_prepare_always",      INT_PARAM, &acc_prepare_always      },
-	{"reason_from_hf",          INT_PARAM, &reason_from_hf          },
-	{"acc_extra_nullable",      INT_PARAM, &acc_extra_nullable      },
+	{"detect_direction",        PARAM_INT, &detect_direction        },
+	{"acc_prepare_flag",        PARAM_INT, &acc_prepare_flag        },
+	{"acc_prepare_always",      PARAM_INT, &acc_prepare_always      },
+	{"reason_from_hf",          PARAM_INT, &reason_from_hf          },
+	{"acc_extra_nullable",      PARAM_INT, &acc_extra_nullable      },
 	/* syslog specific */
-	{"log_flag",             INT_PARAM, &log_flag             },
-	{"log_missed_flag",      INT_PARAM, &log_missed_flag      },
-	{"log_level",            INT_PARAM, &log_level            },
+	{"log_flag",             PARAM_INT, &log_flag             },
+	{"log_missed_flag",      PARAM_INT, &log_missed_flag      },
+	{"log_level",            PARAM_INT, &log_level            },
 	{"log_facility",         PARAM_STRING, &log_facility_str     },
 	{"log_extra",            PARAM_STRING, &log_extra_str        },
 	/* cdr specific */
-	{"cdr_enable",           INT_PARAM, &cdr_enable                 },
+	{"cdr_enable",           PARAM_INT, &cdr_enable                 },
 	{"cdr_skip",             PARAM_STR, &cdr_skip                   },
-	{"cdr_log_enable",         INT_PARAM, &cdr_log_enable           },
-	{"cdr_start_on_confirmed", INT_PARAM, &cdr_start_on_confirmed   },
+	{"cdr_log_enable",         PARAM_INT, &cdr_log_enable           },
+	{"cdr_start_on_confirmed", PARAM_INT, &cdr_start_on_confirmed   },
 	{"cdr_facility",         PARAM_STRING, &cdr_facility_str           },
 	{"cdr_extra",            PARAM_STRING, &cdr_log_extra_str          },
-	{"cdr_extra_nullable",   INT_PARAM, &cdr_extra_nullable            },
+	{"cdr_extra_nullable",   PARAM_INT, &cdr_extra_nullable            },
 	{"cdr_start_id",	 PARAM_STR, &cdr_start_str		},
 	{"cdr_end_id",		 PARAM_STR, &cdr_end_str		},
 	{"cdr_duration_id",	 PARAM_STR, &cdr_duration_str	},
-	{"cdr_expired_dlg_enable", INT_PARAM, &cdr_expired_dlg_enable   },
+	{"cdr_duration_mode",	 PARAM_INT, &cdr_duration_mode	},
+	{"cdr_expired_dlg_enable", PARAM_INT, &cdr_expired_dlg_enable   },
 	/* db-specific */
-	{"db_flag",              INT_PARAM, &db_flag            },
-	{"db_missed_flag",       INT_PARAM, &db_missed_flag     },
+	{"db_flag",              PARAM_INT, &db_flag            },
+	{"db_missed_flag",       PARAM_INT, &db_missed_flag     },
 	{"db_extra",             PARAM_STRING, &db_extra_str    },
 	{"db_url",               PARAM_STR, &db_url             },
 	{"db_table_acc",         PARAM_STR, &db_table_acc       },
 	{"db_table_missed_calls",PARAM_STR, &db_table_mc        },
+	{"db_version_check",PARAM_INT, &db_ver_check        },
 	{"acc_method_column",    PARAM_STR, &acc_method_col     },
 	{"acc_from_tag_column",  PARAM_STR, &acc_fromtag_col    },
 	{"acc_to_tag_column",    PARAM_STR, &acc_totag_col      },
@@ -241,9 +247,9 @@ static param_export_t params[] = {
 	{"acc_sip_code_column",  PARAM_STR, &acc_sipcode_col    },
 	{"acc_sip_reason_column",PARAM_STR, &acc_sipreason_col  },
 	{"acc_time_column",      PARAM_STR, &acc_time_col       },
-	{"db_insert_mode",       INT_PARAM, &acc_db_insert_mode },
+	{"db_insert_mode",       PARAM_INT, &acc_db_insert_mode },
 	/* time-mode-specific */
-	{"time_mode",            INT_PARAM, &acc_time_mode        },
+	{"time_mode",            PARAM_INT, &acc_time_mode        },
 	{"time_attr",            PARAM_STR, &acc_time_attr        },
 	{"time_exten",           PARAM_STR, &acc_time_exten       },
 	{"cdrs_table",           PARAM_STR, &acc_cdrs_table       },
@@ -333,7 +339,7 @@ static int free_acc_fixup(void **param, int param_no)
 /************************** INTERFACE functions ****************************/
 
 
-static int parse_failed_filter(char *s, unsigned short *failed_filter)
+static int parse_failed_filter(char *s, unsigned short *_failed_filter)
 {
 	unsigned int n;
 	char *at;
@@ -352,16 +358,16 @@ static int parse_failed_filter(char *s, unsigned short *failed_filter)
 			LM_ERR("response code in failed_filter must have 3 digits\n");
 			return 0;
 		}
-		failed_filter[n] =
+		_failed_filter[n] =
 				(*s - '0') * 100 + (*(s + 1) - '0') * 10 + (*(s + 2) - '0');
-		if(failed_filter[n] < 300) {
+		if(_failed_filter[n] < 300) {
 			LM_ERR("invalid response code %u in failed_filter\n",
-					failed_filter[n]);
+					_failed_filter[n]);
 			return 0;
 		}
-		LM_DBG("failed_filter %u = %u\n", n, failed_filter[n]);
+		LM_DBG("failed_filter %u = %u\n", n, _failed_filter[n]);
 		n++;
-		failed_filter[n] = 0;
+		_failed_filter[n] = 0;
 		s = at;
 		if(*s == 0)
 			return 1;
@@ -509,6 +515,11 @@ static int mod_init(void)
 
 	if(cdr_expired_dlg_enable < 0 || cdr_expired_dlg_enable > 1) {
 		LM_ERR("cdr_expired_dlg_enable is out of range\n");
+		return -1;
+	}
+
+	if(cdr_duration_mode < 0 || cdr_duration_mode > 2) {
+		LM_ERR("cdr_duration_mode is out of range\n");
 		return -1;
 	}
 

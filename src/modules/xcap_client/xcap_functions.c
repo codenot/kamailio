@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -469,6 +471,10 @@ char *send_http_get(char *path, unsigned int xcap_port, char *match_etag,
 	}
 
 	curl_handle = curl_easy_init();
+	if(curl_handle == NULL) {
+		LM_ERR("curl_easy_init() failed\n");
+		return NULL;
+	}
 
 	curl_easy_setopt(curl_handle, CURLOPT_URL, path);
 

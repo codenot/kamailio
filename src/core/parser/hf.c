@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -232,7 +234,7 @@ void dump_hdr_field(struct hdr_field const *const hf)
 /**
  * free hdr parsed structure using inner free function
  * - hdr parsed struct must have as first file a free function,
- *   so it can be caseted to hf_parsed_t
+ *   so it can be cast to hf_parsed_t
  */
 void hdr_free_parsed(void **h_parsed)
 {

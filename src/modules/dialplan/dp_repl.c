@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -103,7 +105,7 @@ int dpl_dyn_printf_s(sip_msg_t *msg, const pv_elem_p elem,
 		PKG_MEM_ERROR;
 		goto clean;
 	}
-	strcpy(vexpr->s, v.s);
+	memcpy(vexpr->s, v.s, v.len);
 	ret = 0;
 clean:
 	if(s.s)
@@ -119,8 +121,9 @@ int dpl_get_avp_values(sip_msg_t *msg, const pv_elem_p elem,
 		const pv_elem_p avp_elem, struct str_list **out)
 {
 	struct usr_avp *avp = NULL;
-	unsigned short name_type;
-	int_str avp_name, avp_value;
+	avp_flags_t name_type;
+	avp_name_t avp_name;
+	avp_value_t avp_value;
 	struct search_state state;
 	int sum = 0;
 	str s = STR_NULL;
@@ -406,7 +409,7 @@ int rule_translate(sip_msg_t *msg, str *instr, dpl_node_t *rule,
 	int repl_nb, offset, match_nb, rc, cap_cnt;
 	struct replace_with token;
 	struct subst_expr *repl_comp;
-	pcre2_match_data *pcre_md = NULL;
+	static pcre2_match_data *pcre_md = NULL;
 	str match;
 	pv_value_t sv;
 	str *uri;
@@ -422,6 +425,14 @@ int rule_translate(sip_msg_t *msg, str *instr, dpl_node_t *rule,
 	if(!repl_comp) {
 		LM_DBG("null replacement\n");
 		return 0;
+	}
+
+	if(pcre_md == NULL) {
+		pcre_md = pcre2_match_data_create(MAX_REPLACE_WITH, NULL);
+		if(pcre_md == NULL) {
+			LM_ERR("failed to allocate pcre2_match_data\n");
+			return -1;
+		}
 	}
 
 	if(subst_comp) {
@@ -443,7 +454,6 @@ int rule_translate(sip_msg_t *msg, str *instr, dpl_node_t *rule,
 		}
 
 		/*search for the pattern from the compiled subst_exp*/
-		pcre_md = pcre2_match_data_create_from_pattern(subst_comp, NULL);
 		if(pcre2_match(subst_comp, (PCRE2_SPTR)instr->s, (PCRE2_SIZE)instr->len,
 				   0, 0, pcre_md, NULL)
 				<= 0) {
@@ -451,8 +461,6 @@ int rule_translate(sip_msg_t *msg, str *instr, dpl_node_t *rule,
 				   "the match_exp %.*s but not the subst_exp %.*s!\n",
 					instr->len, instr->s, rule->match_exp.len,
 					rule->match_exp.s, rule->subst_exp.len, rule->subst_exp.s);
-			if(pcre_md)
-				pcre2_match_data_free(pcre_md);
 			return -1;
 		}
 		ovector = pcre2_get_ovector_pointer(pcre_md);
@@ -469,8 +477,6 @@ int rule_translate(sip_msg_t *msg, str *instr, dpl_node_t *rule,
 		memcpy(result->s, repl_comp->replacement.s, repl_comp->replacement.len);
 		result->len = repl_comp->replacement.len;
 		result->s[result->len] = '\0';
-		if(pcre_md)
-			pcre2_match_data_free(pcre_md);
 		return 0;
 	}
 
@@ -579,15 +585,11 @@ int rule_translate(sip_msg_t *msg, str *instr, dpl_node_t *rule,
 	}
 
 	result->s[result->len] = '\0';
-	if(pcre_md)
-		pcre2_match_data_free(pcre_md);
 	return 0;
 
 error:
 	result->s = 0;
 	result->len = 0;
-	if(pcre_md)
-		pcre2_match_data_free(pcre_md);
 	return -1;
 }
 
@@ -596,7 +598,7 @@ static char dp_attrs_buf[DP_MAX_ATTRS_LEN + 1];
 int dp_translate_helper(
 		sip_msg_t *msg, str *input, str *output, dpl_id_p idp, str *attrs)
 {
-	pcre2_match_data *pcre_md = NULL;
+	static pcre2_match_data *pcre_md = NULL;
 	dpl_node_p rulep;
 	dpl_index_p indexp;
 	int user_len, rez;
@@ -619,6 +621,14 @@ int dp_translate_helper(
 		return -1;
 	}
 
+	if(pcre_md == NULL) {
+		pcre_md = pcre2_match_data_create(MAX_REPLACE_WITH, NULL);
+		if(pcre_md == NULL) {
+			LM_ERR("failed to allocate pcre2_match_data\n");
+			return -1;
+		}
+	}
+
 search_rule:
 	for(rulep = indexp->first_rule; rulep != NULL; rulep = rulep->next) {
 		switch(rulep->matchop) {
@@ -637,8 +647,6 @@ search_rule:
 					rez = -1;
 					do {
 						if(rez < 0) {
-							pcre_md = pcre2_match_data_create_from_pattern(
-									re_list->re, NULL);
 							rez = pcre2_match(re_list->re, (PCRE2_SPTR)input->s,
 									(PCRE2_SIZE)input->len, 0, 0, pcre_md,
 									NULL);
@@ -648,18 +656,13 @@ search_rule:
 							LM_DBG("match check skipped: [%.*s] %d\n",
 									re_list->expr.len, re_list->expr.s, rez);
 						rt = re_list->next;
-						if(pcre_md)
-							pcre2_match_data_free(pcre_md);
 						pcre2_code_free(re_list->re);
 						pkg_free(re_list);
 						re_list = rt;
 					} while(re_list);
 				} else {
-					pcre_md = pcre2_match_data_create_from_pattern(
-							rulep->match_comp, NULL);
 					rez = pcre2_match(rulep->match_comp, (PCRE2_SPTR)input->s,
 							(PCRE2_SIZE)input->len, 0, 0, pcre_md, 0);
-					pcre2_match_data_free(pcre_md);
 				}
 				break;
 

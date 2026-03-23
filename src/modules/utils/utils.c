@@ -7,6 +7,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -66,17 +68,6 @@ str pres_db_url = {0, 0};
 /* lock for configuration access */
 static gen_lock_t *conf_lock = NULL;
 
-#ifdef MI_REMOVED
-/* FIFO interface functions */
-static struct mi_root *forward_fifo_list(struct mi_root *cmd_tree, void *param);
-static struct mi_root *forward_fifo_switch(
-		struct mi_root *cmd_tree, void *param);
-static struct mi_root *forward_fifo_filter(
-		struct mi_root *cmd_tree, void *param);
-static struct mi_root *forward_fifo_proxy(
-		struct mi_root *cmd_tree, void *param);
-#endif
-
 /* Database connection */
 db1_con_t *pres_dbh = NULL;
 db_func_t pres_dbf;
@@ -99,15 +90,7 @@ static cmd_export_t cmds[] = {
 /* Exported parameters */
 static param_export_t params[] = {{"pres_db_url", PARAM_STR, &pres_db_url},
 		{"xcap_table", PARAM_STR, &xcap_table},
-		{"forward_active", INT_PARAM, &forward_active}, {0, 0, 0}};
-
-#ifdef MI_REMOVED
-static mi_export_t mi_cmds[] = {
-		{"forward_list", forward_fifo_list, MI_NO_INPUT_FLAG, 0, 0},
-		{"forward_switch", forward_fifo_switch, 0, 0, 0},
-		{"forward_filter", forward_fifo_filter, 0, 0, 0},
-		{"forward_proxy", forward_fifo_proxy, 0, 0, 0}, {0, 0, 0, 0, 0}};
-#endif
+		{"forward_active", PARAM_INT, &forward_active}, {0, 0, 0}};
 
 /* Module interface */
 struct module_exports exports = {
@@ -346,133 +329,5 @@ int mod_register(char *path, int *dlflags, void *p1, void *p2)
 	sr_kemi_modules_add(sr_kemi_utils_exports);
 	return 0;
 }
-
-#ifdef MI_REMOVED
-/* FIFO functions */
-
-/*!
- * \brief fifo command for listing configuration
- * \return pointer to the mi_root on success, 0 otherwise
- */
-static struct mi_root *forward_fifo_list(struct mi_root *cmd_tree, void *param)
-{
-	struct mi_node *node = NULL;
-	struct mi_root *ret = init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-	if(ret == NULL)
-		return 0;
-
-	node = addf_mi_node_child(
-			&ret->node, 0, 0, 0, "Printing forwarding information:");
-	if(node == NULL)
-		goto error;
-
-	// critical section start:
-	// avoids dirty reads when updating configuration.
-	lock_get(conf_lock);
-
-	conf_show(ret);
-
-	// critical section end
-	lock_release(conf_lock);
-
-	return ret;
-
-error:
-	free_mi_tree(ret);
-	return 0;
-}
-
-
-/*!
- * \brief fifo command for configuring switch
- * \return pointer to the mi_root on success, 0 otherwise
- */
-static struct mi_root *forward_fifo_switch(
-		struct mi_root *cmd_tree, void *param)
-{
-	struct mi_node *node = NULL;
-	int result;
-
-	node = cmd_tree->node.kids;
-	if(node == NULL || node->next != NULL || node->value.s == NULL)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	// critical section start:
-	// avoids dirty reads when updating configuration.
-	lock_get(conf_lock);
-
-	result = conf_parse_switch(node->value.s);
-
-	// critical section end
-	lock_release(conf_lock);
-
-	if(result < 0) {
-		LM_ERR("cannot parse parameter\n");
-		return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-	}
-	return init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-}
-
-
-/*!
- * \brief fifo command for configuring filter
- * \return pointer to the mi_root on success, 0 otherwise
- */
-static struct mi_root *forward_fifo_filter(
-		struct mi_root *cmd_tree, void *param)
-{
-	struct mi_node *node = NULL;
-	int result;
-
-	node = cmd_tree->node.kids;
-	if(node == NULL || node->next != NULL || node->value.s == NULL)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	// critical section start:
-	//   avoids dirty reads when updating configuration.
-	lock_get(conf_lock);
-
-	result = conf_parse_filter(node->value.s);
-
-	// critical section end
-	lock_release(conf_lock);
-
-	if(result < 0) {
-		LM_ERR("cannot parse parameter\n");
-		return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-	}
-	return init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-}
-
-
-/*!
- * \brief fifo command for configuring proxy
- * \return pointer to the mi_root on success, 0 otherwise
- */
-static struct mi_root *forward_fifo_proxy(struct mi_root *cmd_tree, void *param)
-{
-	struct mi_node *node = NULL;
-	int result;
-
-	node = cmd_tree->node.kids;
-	if(node == NULL || node->next != NULL || node->value.s == NULL)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	// critical section start:
-	//   avoids dirty reads when updating configuration.
-	lock_get(conf_lock);
-
-	result = conf_parse_proxy(node->value.s);
-
-	// critical section end
-	lock_release(conf_lock);
-
-	if(result < 0) {
-		LM_ERR("cannot parse parameter\n");
-		return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-	}
-	return init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-}
-#endif
 
 /** @} */

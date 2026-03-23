@@ -4,7 +4,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -14,7 +14,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -24,6 +24,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -77,11 +79,12 @@ extern int h_errno;
  * Creates a socket and binds it.
  * @param listen_port - port to listen to
  * @param bind_to - IP address to bind to - if empty, will bind to :: (0.0.0.0) (all)
+ * @param vrf - VRF iface name that bind_to is assigned
  * @param sock - socket to be update with the identifier of the opened one
  * @returns 1 on success, 0 on error
  */
 int create_socket(
-		str ip_proto, int listen_port, str bind_to, unsigned int *sock)
+		str ip_proto, int listen_port, str bind_to, str vrf, unsigned int *sock)
 {
 	unsigned int server_sock = -1;
 	struct addrinfo *ainfo = 0, *res = 0, hints;
@@ -103,7 +106,7 @@ int create_socket(
 	if(bind_to.len) {
 		error = getaddrinfo(bind_to.s, buf, &hints, &res);
 		if(error != 0) {
-			LM_WARN("create_socket(): Error opening %.*s port %d while doing "
+			LM_WARN("Error opening %.*s port %d while doing "
 					"gethostbyname >%s\n",
 					bind_to.len, bind_to.s, listen_port, gai_strerror(error));
 			goto error;
@@ -111,7 +114,7 @@ int create_socket(
 	} else {
 		error = getaddrinfo(NULL, buf, &hints, &res);
 		if(error != 0) {
-			LM_WARN("create_socket(): Error opening ANY port %d while doing "
+			LM_WARN("Error opening ANY port %d while doing "
 					"gethostbyname >%s\n",
 					listen_port, gai_strerror(error));
 			goto error;
@@ -124,18 +127,16 @@ int create_socket(
 		if(getnameinfo(ainfo->ai_addr, ainfo->ai_addrlen, host, 256, serv, 256,
 				   NI_NUMERICHOST | NI_NUMERICSERV)
 				== 0) {
-			LM_WARN("create_socket(): Trying to open/bind/listen on %s port "
-					"%s\n",
-					host, serv);
+			LM_WARN("Trying to open/bind/listen on %s port %s proto %.*s\n",
+					host, serv, STR_FMT_VAL(&ip_proto, "tcp"));
 		}
 
 		if((server_sock = socket(
 					ainfo->ai_family, ainfo->ai_socktype, ainfo->ai_protocol))
 				== -1) {
-			LM_ERR("create_socket(): error creating server socket on %s port "
-				   "%s >"
-				   " %s\n",
-					host, serv, strerror(errno));
+			LM_ERR("error creating server socket on %s port %s proto %.*s > "
+				   "%s\n",
+					host, serv, STR_FMT_VAL(&ip_proto, "tcp"), strerror(errno));
 			goto error;
 		}
 		option = 1;
@@ -145,24 +146,39 @@ int create_socket(
 			LM_WARN("failed to set SO_REUSEADDR option for server socket\n");
 		}
 
+		if(vrf.s != NULL && vrf.len > 0) {
+#ifdef __OS_linux
+			if(setsockopt(
+					   server_sock, SOL_SOCKET, SO_BINDTODEVICE, vrf.s, vrf.len)
+					< 0) {
+				LM_WARN("failed to set SO_BINDTODEVICE on %.*s failed: %s\n",
+						STR_FMT(&vrf), strerror(errno));
+			}
+#else
+			LM_WARN("SO_BINDTODEVICE only supported on linux, vrf %.*s "
+					"ignored\n",
+					STR_FMT(&vrf));
+#endif
+		}
+
 		if(bind(server_sock, ainfo->ai_addr, ainfo->ai_addrlen) == -1) {
-			LM_ERR("create_socket(): error binding on %s port %s >"
-				   " %s\n",
-					host, serv, strerror(errno));
+			LM_ERR("error binding on %s port %s proto %.*s vrf %.*s > %s\n",
+					host, serv, STR_FMT_VAL(&ip_proto, "tcp"), STR_FMT(&vrf),
+					strerror(errno));
 			goto error;
 		}
 
 		if(listen(server_sock, 5) == -1) {
-			LM_ERR("create_socket(): error listening on %s port %s > %s\n",
-					host, serv, strerror(errno));
+			LM_ERR("error listening on %s port %s > %s\n", host, serv,
+					strerror(errno));
 			goto error;
 		}
 
 		*sock = server_sock;
 
-		LM_WARN("create_socket(): Successful socket open/bind/listen on %s "
-				"port %s\n",
-				host, serv);
+		LM_WARN("Successful socket open/bind/listen on %s port %s proto %.*s "
+				"vrf %.*s\n",
+				host, serv, STR_FMT_VAL(&ip_proto, "tcp"), STR_FMT(&vrf));
 	}
 	if(res)
 		freeaddrinfo(res);
@@ -191,10 +207,10 @@ inline static int accept_connection(int server_sock, int *new_sock)
 	*new_sock = accept(server_sock, (struct sockaddr *)&remote, &length);
 
 	if(*new_sock == -1) {
-		LM_ERR("accept_connection(): accept failed!\n");
+		LM_ERR("accept failed!\n");
 		goto error;
 	} else {
-		LM_INFO("accept_connection(): new tcp connection accepted!\n");
+		LM_INFO("new tcp connection accepted!\n");
 	}
 
 	receiver_send_socket(*new_sock, 0);
@@ -241,14 +257,14 @@ void accept_loop()
 		nready = select(max_sock + 1, &listen_set, 0, 0, &timeout);
 		if(nready == 0) {
 			if(debug_heavy)
-				LM_DBG("accept_loop(): No connection attempts\n");
+				LM_DBG("No connection attempts\n");
 			continue;
 		}
 		if(nready == -1) {
 			if(errno == EINTR) {
 				continue;
 			} else {
-				LM_ERR("accept_loop(): select fails: %s\n", strerror(errno));
+				LM_ERR("select fails: %s\n", strerror(errno));
 				sleep(2);
 				continue;
 			}

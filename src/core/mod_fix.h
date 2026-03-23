@@ -178,10 +178,28 @@ int fixup_free_ssi(void **param, int param_no);
 int fixup_sii(void **param, int param_no);
 int fixup_free_sii(void **param, int param_no);
 
+int fixup_sis(void **param, int param_no);
+int fixup_free_sis(void **param, int param_no);
+
 int fixup_sssi(void **param, int param_no);
 int fixup_free_sssi(void **param, int param_no);
 
 int fixup_ssii(void **param, int param_no);
 int fixup_free_ssii(void **param, int param_no);
+
+int fixup_isi(void **param, int param_no);
+int fixup_free_isi(void **param, int param_no);
+
+int fixup_iss(void **param, int param_no);
+int fixup_free_iss(void **param, int param_no);
+
+int fixup_iiss(void **param, int param_no);
+int fixup_free_iiss(void **param, int param_no);
+
+int fixup_isii(void **param, int param_no);
+int fixup_free_isii(void **param, int param_no);
+
+int fixup_isiii(void **param, int param_no);
+int fixup_free_isiii(void **param, int param_no);
 
 #endif

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -35,7 +37,7 @@
 
 /*
  * Parse comma separated list of methods pointed by _body and assign their
- * enum bits to _methods.  Returns 1 on success and 0 on failure.
+ * enum bits to _methods.  Returns 0 on success and -1 on failure.
  */
 int parse_methods(const str *const _body, unsigned int *const _methods);
 

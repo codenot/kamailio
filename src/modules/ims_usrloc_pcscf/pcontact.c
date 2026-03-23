@@ -6,7 +6,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -16,7 +16,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -26,6 +26,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -192,7 +194,7 @@ int new_pcontact(struct udomain *_d, str *_contact, struct pcontact_info *_ci,
 	memcpy(p, _contact->s, _contact->len);
 	p += _contact->len;
 	(*_c)->aor.len = _contact->len;
-	(*_c)->domain = (str *)_d;
+	(*_c)->domain = _d->name;
 
 	if(parse_uri((*_c)->aor.s, (*_c)->aor.len, &sip_uri) != 0) {
 		LM_ERR("unable to determine contact host from uri [%.*s\n",
@@ -263,7 +265,7 @@ int new_pcontact(struct udomain *_d, str *_contact, struct pcontact_info *_ci,
 	(*_c)->aorhash =
 			get_aor_hash(_d, &_ci->via_host, _ci->via_port, _ci->via_prot);
 
-	//setup public ids
+	//set up public ids
 	for(i = 0; i < _ci->num_public_ids; i++) {
 		if(i > 0)
 			is_default =

@@ -63,6 +63,11 @@ static int w_t_cancel_callid_3(
 static int w_t_cancel_callid_4(
 		sip_msg_t *msg, char *cid, char *cseq, char *flag, char *creason);
 static int fixup_cancel_callid(void **param, int param_no);
+static int w_t_uac_ack_local_2(sip_msg_t *msg, char *cid, char *cseq);
+static int w_t_uac_ack_local_3(
+		sip_msg_t *msg, char *cid, char *cseq, char *phdrs);
+static int w_t_uac_ack_local_4(
+		sip_msg_t *msg, char *cid, char *cseq, char *phdrs, char *pbody);
 static int t_reply_callid(
 		sip_msg_t *msg, char *cid, char *cseq, char *rc, char *rs);
 static int fixup_reply_callid(void **param, int param_no);
@@ -81,6 +86,10 @@ static int w_t_continue(sip_msg_t *msg, char *idx, char *lbl, char *rtn);
 static int w_t_reuse_branch(sip_msg_t *msg, char *, char *);
 static int fixup_t_continue(void **param, int param_no);
 static int w_t_precheck_trans(sip_msg_t *, char *, char *);
+
+static int w_t_vbflag_set(sip_msg_t *msg, char *pflag, char *p2);
+static int w_t_vbflag_reset(sip_msg_t *msg, char *pflag, char *p2);
+static int w_t_vbflag_is_set(sip_msg_t *msg, char *pflag, char *p2);
 
 static int tmx_cfg_callback(sip_msg_t *msg, unsigned int flags, void *cbp);
 
@@ -118,100 +127,111 @@ unsigned long tmx_stats_rld_rcv_rpls(void);
 unsigned long tmx_stats_rld_loc_rpls(void);
 unsigned long tmx_stats_rld_tot_rpls(void);
 
+/* clang-format off */
 static stat_export_t mod_stats[] = {
-		{"UAS_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_uas_trans},
-		{"UAC_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_uac_trans},
-		{"2xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_2xx},
-		{"3xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_3xx},
-		{"4xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_4xx},
-		{"5xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_5xx},
-		{"6xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_6xx},
-		{"inuse_transactions", STAT_IS_FUNC,
-				(stat_var **)tmx_stats_trans_inuse},
-		{"active_transactions", STAT_IS_FUNC,
-				(stat_var **)tmx_stats_trans_active},
-		{"rpl_received", STAT_IS_FUNC, (stat_var **)tmx_stats_rcv_rpls},
-		{"rpl_absorbed", STAT_IS_FUNC, (stat_var **)tmx_stats_abs_rpls},
-		{"rpl_generated", STAT_IS_FUNC, (stat_var **)tmx_stats_rld_loc_rpls},
-		{"rpl_relayed", STAT_IS_FUNC, (stat_var **)tmx_stats_rld_rcv_rpls},
-		{"rpl_sent", STAT_IS_FUNC, (stat_var **)tmx_stats_rld_tot_rpls},
-		{0, 0, 0}};
+	{"UAS_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_uas_trans},
+	{"UAC_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_uac_trans},
+	{"2xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_2xx},
+	{"3xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_3xx},
+	{"4xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_4xx},
+	{"5xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_5xx},
+	{"6xx_transactions", STAT_IS_FUNC, (stat_var **)tmx_stats_trans_6xx},
+	{"inuse_transactions", STAT_IS_FUNC,
+			(stat_var **)tmx_stats_trans_inuse},
+	{"active_transactions", STAT_IS_FUNC,
+			(stat_var **)tmx_stats_trans_active},
+	{"rpl_received", STAT_IS_FUNC, (stat_var **)tmx_stats_rcv_rpls},
+	{"rpl_absorbed", STAT_IS_FUNC, (stat_var **)tmx_stats_abs_rpls},
+	{"rpl_generated", STAT_IS_FUNC, (stat_var **)tmx_stats_rld_loc_rpls},
+	{"rpl_relayed", STAT_IS_FUNC, (stat_var **)tmx_stats_rld_rcv_rpls},
+	{"rpl_sent", STAT_IS_FUNC, (stat_var **)tmx_stats_rld_tot_rpls},
+	{0, 0, 0}
+};
 #endif
 
 /**
  * pseudo-variables exported by TM module
  */
 static pv_export_t mod_pvs[] = {
-		{{"T_branch_idx", sizeof("T_branch_idx") - 1}, PVT_OTHER,
-				pv_get_tm_branch_idx, 0, 0, 0, 0, 0},
-		{{"T_reply_ruid", sizeof("T_reply_ruid") - 1}, PVT_OTHER,
-				pv_get_tm_reply_ruid, 0, 0, 0, 0, 0},
-		{{"T_reply_code", sizeof("T_reply_code") - 1}, PVT_OTHER,
-				pv_get_tm_reply_code, 0, 0, 0, 0, 0},
-		{{"T_reply_reason", sizeof("T_reply_reason") - 1}, PVT_OTHER,
-				pv_get_tm_reply_reason, 0, 0, 0, 0, 0},
-		{{"T_reply_last", sizeof("T_reply_last") - 1}, PVT_OTHER,
-				pv_get_tm_reply_last_received, 0, 0, 0, 0, 0},
-		{{"T_inv", sizeof("T_inv") - 1}, PVT_OTHER, pv_get_t_var_inv, 0,
-				pv_parse_t_var_name, 0, 0, 0},
-		{{"T_req", sizeof("T_req") - 1}, PVT_OTHER, pv_get_t_var_req, 0,
-				pv_parse_t_var_name, 0, 0, 0},
-		{{"T_rpl", sizeof("T_rpl") - 1}, PVT_OTHER, pv_get_t_var_rpl, 0,
-				pv_parse_t_var_name, 0, 0, 0},
-		{{"T", sizeof("T") - 1}, PVT_OTHER, pv_get_t, 0, pv_parse_t_name, 0, 0,
-				0},
-		{{"T_branch", sizeof("T_branch") - 1}, PVT_OTHER, pv_get_t_branch, 0,
-				pv_parse_t_name, 0, 0, 0},
-		{{0, 0}, 0, 0, 0, 0, 0, 0, 0}};
+	{{"T_branch_idx", sizeof("T_branch_idx") - 1}, PVT_OTHER,
+			pv_get_tm_branch_idx, 0, 0, 0, 0, 0},
+	{{"T_reply_ruid", sizeof("T_reply_ruid") - 1}, PVT_OTHER,
+			pv_get_tm_reply_ruid, 0, 0, 0, 0, 0},
+	{{"T_reply_code", sizeof("T_reply_code") - 1}, PVT_OTHER,
+			pv_get_tm_reply_code, 0, 0, 0, 0, 0},
+	{{"T_reply_reason", sizeof("T_reply_reason") - 1}, PVT_OTHER,
+			pv_get_tm_reply_reason, 0, 0, 0, 0, 0},
+	{{"T_reply_last", sizeof("T_reply_last") - 1}, PVT_OTHER,
+			pv_get_tm_reply_last_received, 0, 0, 0, 0, 0},
+	{{"T_inv", sizeof("T_inv") - 1}, PVT_OTHER, pv_get_t_var_inv, 0,
+			pv_parse_t_var_name, 0, 0, 0},
+	{{"T_req", sizeof("T_req") - 1}, PVT_OTHER, pv_get_t_var_req, 0,
+			pv_parse_t_var_name, 0, 0, 0},
+	{{"T_rpl", sizeof("T_rpl") - 1}, PVT_OTHER, pv_get_t_var_rpl, 0,
+			pv_parse_t_var_name, 0, 0, 0},
+	{{"T", sizeof("T") - 1}, PVT_OTHER, pv_get_t, 0, pv_parse_t_name, 0, 0, 0},
+	{{"T_branch", sizeof("T_branch") - 1}, PVT_OTHER, pv_get_t_branch, 0,
+			pv_parse_t_name, 0, 0, 0},
+	{{0, 0}, 0, 0, 0, 0, 0, 0, 0}
+};
 
 static cmd_export_t cmds[] = {
-		{"t_cancel_branches", (cmd_function)t_cancel_branches, 1,
-				fixup_cancel_branches, 0, ONREPLY_ROUTE},
-		{"t_cancel_callid", (cmd_function)w_t_cancel_callid_3, 3,
-				fixup_cancel_callid, 0, ANY_ROUTE},
-		{"t_cancel_callid", (cmd_function)w_t_cancel_callid_4, 4,
-				fixup_cancel_callid, 0, ANY_ROUTE},
-		{"t_reply_callid", (cmd_function)t_reply_callid, 4, fixup_reply_callid,
-				0, ANY_ROUTE},
-		{"t_flush_flags", (cmd_function)t_flush_flags, 0, 0, 0, ANY_ROUTE},
-		{"t_flush_xflags", (cmd_function)t_flush_xflags, 0, 0, 0, ANY_ROUTE},
-		{"t_is_failure_route", (cmd_function)w_t_is_failure_route, 0, 0, 0,
-				ANY_ROUTE},
-		{"t_is_branch_route", (cmd_function)w_t_is_branch_route, 0, 0, 0,
-				ANY_ROUTE},
-		{"t_is_reply_route", (cmd_function)w_t_is_reply_route, 0, 0, 0,
-				ANY_ROUTE},
-		{"t_is_request_route", (cmd_function)w_t_is_request_route, 0, 0, 0,
-				ANY_ROUTE},
-		{"t_suspend", (cmd_function)w_t_suspend, 0, 0, 0, ANY_ROUTE},
-		{"t_continue", (cmd_function)w_t_continue, 3, fixup_t_continue, 0,
-				ANY_ROUTE},
-		{"t_reuse_branch", (cmd_function)w_t_reuse_branch, 0, 0, 0,
-				EVENT_ROUTE},
-		{"t_precheck_trans", (cmd_function)w_t_precheck_trans, 0, 0, 0,
-				REQUEST_ROUTE},
-		{"bind_tmx", (cmd_function)bind_tmx, 1, 0, 0, ANY_ROUTE},
-		{"t_drop", (cmd_function)w_t_drop0, 0, 0, 0, ANY_ROUTE},
-		{"t_drop", (cmd_function)w_t_drop1, 1, fixup_igp_null, 0, ANY_ROUTE},
-		{0, 0, 0, 0, 0, 0}};
+		{"t_uac_ack_local", (cmd_function)w_t_uac_ack_local_2, 2,
+				fixup_cancel_callid, 0, ANY_ROUTE },
+		{"t_uac_ack_local", (cmd_function)w_t_uac_ack_local_3, 3,
+				fixup_cancel_callid, 0, ANY_ROUTE },
+		{"t_uac_ack_local", (cmd_function)w_t_uac_ack_local_4, 4,
+				fixup_cancel_callid, 0, ANY_ROUTE },
+	{"t_cancel_branches", (cmd_function)t_cancel_branches, 1,
+			fixup_cancel_branches, 0, ONREPLY_ROUTE},
+	{"t_cancel_callid", (cmd_function)w_t_cancel_callid_3, 3,
+			fixup_cancel_callid, 0, ANY_ROUTE},
+	{"t_cancel_callid", (cmd_function)w_t_cancel_callid_4, 4,
+			fixup_cancel_callid, 0, ANY_ROUTE},
+	{"t_reply_callid", (cmd_function)t_reply_callid, 4,
+			fixup_reply_callid,	0, ANY_ROUTE},
+	{"t_flush_flags", (cmd_function)t_flush_flags, 0, 0, 0, ANY_ROUTE},
+	{"t_flush_xflags", (cmd_function)t_flush_xflags, 0, 0, 0, ANY_ROUTE},
+	{"t_is_failure_route", (cmd_function)w_t_is_failure_route, 0, 0, 0,	ANY_ROUTE},
+	{"t_is_branch_route", (cmd_function)w_t_is_branch_route, 0, 0, 0, ANY_ROUTE},
+	{"t_is_reply_route", (cmd_function)w_t_is_reply_route, 0, 0, 0, ANY_ROUTE},
+	{"t_is_request_route", (cmd_function)w_t_is_request_route, 0, 0, 0, ANY_ROUTE},
+	{"t_suspend", (cmd_function)w_t_suspend, 0, 0, 0, ANY_ROUTE},
+	{"t_continue", (cmd_function)w_t_continue, 3, fixup_t_continue, 0, ANY_ROUTE},
+	{"t_reuse_branch", (cmd_function)w_t_reuse_branch, 0, 0, 0, EVENT_ROUTE},
+	{"t_precheck_trans", (cmd_function)w_t_precheck_trans, 0, 0, 0, REQUEST_ROUTE},
+	{"t_drop", (cmd_function)w_t_drop0, 0, 0, 0, ANY_ROUTE},
+	{"t_drop", (cmd_function)w_t_drop1, 1, fixup_igp_null, 0, ANY_ROUTE},
+	{"t_vbflag_set", (cmd_function)w_t_vbflag_set, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
+	{"t_vbflag_reset", (cmd_function)w_t_vbflag_reset, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
+	{"t_vbflag_is_set", (cmd_function)w_t_vbflag_is_set, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
+	{"bind_tmx", (cmd_function)bind_tmx, 1, 0, 0, ANY_ROUTE},
+	{0, 0, 0, 0, 0, 0}
+};
 
 static param_export_t params[] = {
-		{"precheck_trans", PARAM_INT, &_tmx_precheck_trans}, {0, 0, 0}};
+	{"precheck_trans", PARAM_INT, &_tmx_precheck_trans},
+	{0, 0, 0}
+};
 
 
 /** module exports */
 struct module_exports exports = {
-		"tmx",			 /* module name */
-		DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,			 /* cmd (cfg function) exports */
-		params,			 /* param exports */
-		0,				 /* RPC method exports */
-		mod_pvs,		 /* pv exports */
-		0,				 /* response handling function */
-		mod_init,		 /* module init function */
-		child_init,		 /* per-child init function */
-		destroy			 /* module destroy function */
+	"tmx",           /* module name */
+	DEFAULT_DLFLAGS, /* dlopen flags */
+	cmds,            /* cmd (cfg function) exports */
+	params,          /* param exports */
+	0,               /* RPC method exports */
+	mod_pvs,         /* pv exports */
+	0,               /* response handling function */
+	mod_init,        /* module init function */
+	child_init,      /* per-child init function */
+	destroy          /* module destroy function */
 };
+/* clang-format on */
 
 /**
  * init module function
@@ -334,7 +354,7 @@ static int t_cancel_branches_helper(sip_msg_t *msg, int n)
 	LM_DBG("canceling %d/%d\n", n, (int)cancel_data.cancel_bitmap);
 	if(cancel_data.cancel_bitmap == 0)
 		return -1;
-	_tmx_tmb.cancel_uacs(t, &cancel_data, 0);
+	_tmx_tmb.cancel_uacs(t, &cancel_data, F_CANCEL_LOCAL);
 	return 1;
 }
 
@@ -409,7 +429,7 @@ static int ki_t_cancel_callid_reason(
 	cancel_data.reason.cause = rcode;
 	cancel_data.cancel_bitmap = 0;
 	_tmx_tmb.prepare_to_cancel(trans, &cancel_data.cancel_bitmap, 0);
-	_tmx_tmb.cancel_uacs(trans, &cancel_data, 0);
+	_tmx_tmb.cancel_uacs(trans, &cancel_data, F_CANCEL_LOCAL);
 
 	//_tmx_tmb.unref_cell(trans);
 	_tmx_tmb.t_sett(bkt, bkb);
@@ -479,6 +499,90 @@ static int w_t_cancel_callid_4(
 		sip_msg_t *msg, char *cid, char *cseq, char *flag, char *creason)
 {
 	return t_cancel_callid(msg, cid, cseq, flag, creason);
+}
+
+static int ki_t_uac_ack_local(
+		sip_msg_t *msg, str *callid_s, str *cseq_s, str *hdrs, str *body)
+{
+
+	tm_cell_t *trans;
+	tm_cell_t *bkt;
+	int bkb;
+	int ret;
+
+	bkt = _tmx_tmb.t_gett();
+	bkb = _tmx_tmb.t_gett_branch();
+	if(_tmx_tmb.t_lookup_callid(&trans, *callid_s, *cseq_s) < 0) {
+		DBG("Lookup failed - no transaction\n");
+		return -1;
+	}
+
+	DBG("Now calling ack_local_uac\n");
+	ret = _tmx_tmb.ack_local_uac(trans, hdrs, body);
+
+	_tmx_tmb.t_sett(bkt, bkb);
+
+	return ret;
+}
+
+static int t_uac_ack_local(
+		sip_msg_t *msg, char *cid, char *cseq, char *phdrs, char *pbody)
+{
+
+	str cseq_s;
+	str callid_s;
+	str headers = STR_NULL;
+	str body = STR_NULL;
+
+	if(fixup_get_svalue(msg, (gparam_p)cid, &callid_s) < 0) {
+		LM_ERR("cannot get callid\n");
+		return -1;
+	}
+
+	if(fixup_get_svalue(msg, (gparam_p)cseq, &cseq_s) < 0) {
+		LM_ERR("cannot get cseq\n");
+		return -1;
+	}
+
+	if(fixup_get_svalue(msg, (gparam_t *)phdrs, &headers) != 0) {
+		LM_ERR("invalid headers parameter\n");
+		return -1;
+	}
+	if(fixup_get_svalue(msg, (gparam_t *)pbody, &body) != 0) {
+		LM_ERR("invalid body parameter\n");
+		return -1;
+	}
+
+	if(ki_t_uac_ack_local(msg, &callid_s, &cseq_s, &headers, &body) < 0) {
+		return -1;
+	}
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_t_uac_ack_local_2(sip_msg_t *msg, char *cid, char *cseq)
+{
+	return t_uac_ack_local(msg, cid, cseq, NULL, NULL);
+}
+
+/**
+ *
+ */
+static int w_t_uac_ack_local_3(
+		sip_msg_t *msg, char *cid, char *cseq, char *phdrs)
+{
+	return t_uac_ack_local(msg, cid, cseq, phdrs, NULL);
+}
+
+/**
+ *
+ */
+static int w_t_uac_ack_local_4(
+		sip_msg_t *msg, char *cid, char *cseq, char *phdrs, char *pbody)
+{
+	return t_uac_ack_local(msg, cid, cseq, phdrs, pbody);
 }
 
 /**
@@ -921,7 +1025,7 @@ static int t_precheck_trans(sip_msg_t *msg)
 	ret = tmx_check_pretran(msg);
 	if(ret > 0)
 		return 1;
-	return (ret - 1);
+	return (ret == 0) ? -1 : ret;
 }
 
 /**
@@ -930,6 +1034,168 @@ static int t_precheck_trans(sip_msg_t *msg)
 static int w_t_precheck_trans(sip_msg_t *msg, char *p1, char *p2)
 {
 	return t_precheck_trans(msg);
+}
+
+int tmx_get_branch_idx(sip_msg_t *msg)
+{
+	tm_cell_t *t = NULL;
+	tm_ctx_t *tcx = 0;
+
+	if(msg == NULL) {
+		return T_BR_UNDEFINED;
+	}
+
+	/* stateful replies have the branch_index set */
+	if(msg->first_line.type == SIP_REPLY) {
+		tcx = _tmx_tmb.tm_ctx_get();
+		if(tcx != NULL) {
+			return tcx->branch_index;
+		}
+		return T_BR_UNDEFINED;
+	}
+
+	switch(route_type) {
+		case BRANCH_ROUTE:
+		case BRANCH_FAILURE_ROUTE:
+			/* branch and branch_failure routes have their index set */
+			tcx = _tmx_tmb.tm_ctx_get();
+			if(tcx != NULL) {
+				return tcx->branch_index;
+			}
+			return T_BR_UNDEFINED;
+		case REQUEST_ROUTE:
+			t = _tmx_tmb.t_gett();
+			if(t == NULL || t == T_UNDEFINED) {
+				return T_BR_UNDEFINED;
+			}
+			/* transaction created - use first branch */
+			return 0;
+		case FAILURE_ROUTE:
+			return _tmx_tmb.t_get_picked_branch();
+	}
+	return T_BR_UNDEFINED;
+}
+
+/**
+ *
+ */
+static int ki_t_vbflag_is_set(sip_msg_t *msg, int fval)
+{
+	int bidx = T_BR_UNDEFINED;
+	tm_cell_t *t = NULL;
+
+	if((flag_t)fval > MAX_FLAG) {
+		return -1;
+	}
+	t = _tmx_tmb.t_gett();
+	if(t == NULL || t == T_UNDEFINED) {
+		return -1;
+	}
+	bidx = tmx_get_branch_idx(msg);
+	if(bidx == T_BR_UNDEFINED) {
+		return -1;
+	}
+	if(bidx != 0 && bidx >= t->nr_of_outgoings) {
+		return -1;
+	}
+
+	if(t->uac[bidx].vbflags & (fval << 1)) {
+		return 1;
+	}
+	return -1;
+}
+
+/**
+ *
+ */
+static int w_t_vbflag_is_set(sip_msg_t *msg, char *flag, char *s2)
+{
+	int fval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)flag, &fval) != 0) {
+		LM_ERR("no flag value\n");
+		return -1;
+	}
+	return ki_t_vbflag_is_set(msg, fval);
+}
+
+/**
+ *
+ */
+static int ki_t_vbflag_reset(sip_msg_t *msg, int fval)
+{
+	int bidx = T_BR_UNDEFINED;
+	tm_cell_t *t = NULL;
+
+	if((flag_t)fval > MAX_FLAG) {
+		return -1;
+	}
+	t = _tmx_tmb.t_gett();
+	if(t == NULL || t == T_UNDEFINED) {
+		return -1;
+	}
+	bidx = tmx_get_branch_idx(msg);
+	if(bidx == T_BR_UNDEFINED) {
+		return -1;
+	}
+	if(bidx != 0 && bidx >= t->nr_of_outgoings) {
+		return -1;
+	}
+
+	t->uac[bidx].vbflags &= ~(1 << fval);
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_t_vbflag_reset(sip_msg_t *msg, char *flag, char *s2)
+{
+	int fval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)flag, &fval) != 0) {
+		LM_ERR("no flag value\n");
+		return -1;
+	}
+	return ki_t_vbflag_reset(msg, fval);
+}
+
+/**
+ *
+ */
+static int ki_t_vbflag_set(sip_msg_t *msg, int fval)
+{
+	int bidx = T_BR_UNDEFINED;
+	tm_cell_t *t = NULL;
+
+	if((flag_t)fval > MAX_FLAG) {
+		return -1;
+	}
+	t = _tmx_tmb.t_gett();
+	if(t == NULL || t == T_UNDEFINED) {
+		return -1;
+	}
+	bidx = tmx_get_branch_idx(msg);
+	if(bidx == T_BR_UNDEFINED) {
+		return -1;
+	}
+	if(bidx != 0 && bidx >= t->nr_of_outgoings) {
+		return -1;
+	}
+
+	t->uac[bidx].vbflags |= (1 << fval);
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_t_vbflag_set(sip_msg_t *msg, char *flag, char *s2)
+{
+	int fval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)flag, &fval) != 0) {
+		LM_ERR("no flag value\n");
+		return -1;
+	}
+	return ki_t_vbflag_set(msg, fval);
 }
 
 /**
@@ -1124,6 +1390,11 @@ static sr_kemi_t sr_kemi_tmx_exports[] = {
 		SR_KEMIP_INT, ki_t_cancel_callid_reason,
 		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_INT,
 			SR_KEMIP_INT, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("tmx"), str_init("t_uac_ack_local"),
+		SR_KEMIP_INT, ki_t_uac_ack_local,
+		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+			SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
 	{ str_init("tmx"), str_init("t_reply_callid"),
 		SR_KEMIP_INT, ki_t_reply_callid,

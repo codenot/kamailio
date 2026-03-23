@@ -34,20 +34,133 @@
 #include "msrp_env.h"
 #include "msrp_netio.h"
 
+
+#define msrp_buffer_append(buf, val, len, csize, msize) \
+	do {                                                \
+		if(csize + len >= msize - 1) {                  \
+			LM_ERR("result is too large\n");            \
+			goto error;                                 \
+		}                                               \
+		memcpy(buf, val, len);                          \
+		p += len;                                       \
+		csize += len;                                   \
+	} while(0)
+
+
 /**
  *
  */
-int msrp_forward_frame(msrp_frame_t *mf, int flags)
+int msrp_forward(msrp_frame_t *mf, str *tpath, str *fpath)
 {
-#if 0
-	if ((msrp_uri_to_dstinfo(0, &dst, uac_r->dialog->send_sock, snd_flags,
-						uac_r->dialog->hooks.next_hop, PROTO_NONE)==0) ||
-				(dst.send_sock==0)){
-			LM_ERR("no send socket found\n");
+	char fwdbuff[MSRP_MAX_FRAME_SIZE];
+	msrp_env_t *env = msrp_get_env();
+	char *buf;
+	int len;
+
+	if(tpath) {
+		msrp_hdr_t *hdr;
+		int csize = 0;
+		char *p;
+
+		if(fpath) {
+			hdr = msrp_get_hdr_by_id(mf, MSRP_HDR_FROM_PATH);
+			if(!hdr) {
+				LM_ERR("From-Path header not found\n");
+				return -1;
+			}
+		}
+
+		/* hdr must hold To-Path until we copy it bellow */
+		hdr = msrp_get_hdr_by_id(mf, MSRP_HDR_TO_PATH);
+		if(!hdr) {
+			LM_ERR("To-Path header not found\n");
 			return -1;
 		}
-#endif
+
+		p = fwdbuff;
+
+		msrp_buffer_append(p, mf->fline.buf.s, mf->fline.buf.len, csize,
+				MSRP_MAX_FRAME_SIZE);
+		msrp_buffer_append(p, "To-Path: ", 9, csize, MSRP_MAX_FRAME_SIZE);
+		msrp_buffer_append(p, tpath->s, tpath->len, csize, MSRP_MAX_FRAME_SIZE);
+		msrp_buffer_append(p, "\r\n", 2, csize, MSRP_MAX_FRAME_SIZE);
+		msrp_buffer_append(p, "From-Path: ", 11, csize, MSRP_MAX_FRAME_SIZE);
+
+		if(fpath) {
+			msrp_buffer_append(
+					p, fpath->s, fpath->len, csize, MSRP_MAX_FRAME_SIZE);
+			msrp_buffer_append(p, "\r\n", 2, csize, MSRP_MAX_FRAME_SIZE);
+		} else {
+			/* hdr must hold To-Path from above */
+			msrp_buffer_append(
+					p, hdr->buf.s, hdr->buf.len, csize, MSRP_MAX_FRAME_SIZE);
+		}
+
+		for(hdr = mf->headers; hdr; hdr = hdr->next) {
+			if(hdr->htype == MSRP_HDR_TO_PATH
+					|| hdr->htype == MSRP_HDR_FROM_PATH) {
+				continue;
+			}
+
+			msrp_buffer_append(
+					p, hdr->buf.s, hdr->buf.len, csize, MSRP_MAX_FRAME_SIZE);
+		}
+
+		if(mf->mbody.len > 0) {
+			msrp_buffer_append(p, "\r\n", 2, csize, MSRP_MAX_FRAME_SIZE);
+
+			msrp_buffer_append(
+					p, mf->mbody.s, mf->mbody.len, csize, MSRP_MAX_FRAME_SIZE);
+		}
+
+		msrp_buffer_append(
+				p, mf->endline.s, mf->endline.len, csize, MSRP_MAX_FRAME_SIZE);
+
+		buf = fwdbuff;
+		len = p - fwdbuff;
+	} else {
+		buf = mf->buf.s;
+		len = mf->buf.len;
+	}
+
+	if(!(env->envflags & MSRP_ENV_DSTINFO)
+			&& (!tpath || msrp_env_set_dstinfo(mf, tpath, NULL, 0) < 0)) {
+		LM_ERR("unable to set destination address\n");
+		return -1;
+	}
+
+	if(unlikely((env->dstinfo.proto == PROTO_WS
+						|| env->dstinfo.proto == PROTO_WSS)
+				&& sr_event_enabled(SREV_TCP_WS_FRAME_OUT))) {
+		struct tcp_connection *con = tcpconn_get(env->dstinfo.id, 0, 0, 0, 0);
+		sr_event_param_t evp = {0};
+		ws_event_info_t wsev;
+		int ret;
+
+		if(con == NULL) {
+			LM_WARN("TCP/TLS connection for WebSocket could not be"
+					"found\n");
+			return -1;
+		}
+
+		memset(&wsev, 0, sizeof(ws_event_info_t));
+		wsev.type = SREV_TCP_WS_FRAME_OUT;
+		wsev.buf = buf;
+		wsev.len = len;
+		wsev.id = con->id;
+		evp.data = (void *)&wsev;
+		ret = sr_event_exec(SREV_TCP_WS_FRAME_OUT, &evp);
+		tcpconn_put(con);
+		return ret;
+	} else if(tcp_send(&env->dstinfo, 0, buf, len) < 0) {
+		LM_ERR("forwarding frame failed\n");
+		return -1;
+	}
+
 	return 0;
+
+error:
+	return -1;
 }
 
 /**
@@ -186,6 +299,7 @@ int msrp_reply(msrp_frame_t *mf, str *code, str *text, str *xhdrs)
 	msrp_env_t *env;
 	char *p;
 	char *l;
+	int csize = 0;
 	sr_event_param_t evp = {0};
 	int ret;
 
@@ -199,24 +313,17 @@ int msrp_reply(msrp_frame_t *mf, str *code, str *text, str *xhdrs)
 	}
 
 	p = rplbuf;
-	memcpy(p, mf->fline.protocol.s, mf->fline.protocol.len);
-	p += mf->fline.protocol.len;
-	*p = ' ';
-	p++;
-	memcpy(p, mf->fline.transaction.s, mf->fline.transaction.len);
-	p += mf->fline.transaction.len;
-	*p = ' ';
-	p++;
-	memcpy(p, code->s, code->len);
-	p += code->len;
-	*p = ' ';
-	p++;
-	memcpy(p, text->s, text->len);
-	p += text->len;
-	memcpy(p, "\r\n", 2);
-	p += 2;
-	memcpy(p, "To-Path: ", 9);
-	p += 9;
+	msrp_buffer_append(p, mf->fline.protocol.s, mf->fline.protocol.len, csize,
+			MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, " ", 1, csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, mf->fline.transaction.s, mf->fline.transaction.len,
+			csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, " ", 1, csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, code->s, code->len, csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, " ", 1, csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, text->s, text->len, csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, "\r\n", 2, csize, MSRP_MAX_FRAME_SIZE);
+	msrp_buffer_append(p, "To-Path: ", 9, csize, MSRP_MAX_FRAME_SIZE);
 	hdr = msrp_get_hdr_by_id(mf, MSRP_HDR_FROM_PATH);
 	if(hdr == NULL) {
 		LM_ERR("From-Path header not found\n");
@@ -225,48 +332,44 @@ int msrp_reply(msrp_frame_t *mf, str *code, str *text, str *xhdrs)
 	if(mf->fline.msgtypeid == MSRP_REQ_SEND) {
 		l = q_memchr(hdr->body.s, ' ', hdr->body.len);
 		if(l == NULL) {
-			memcpy(p, hdr->body.s, hdr->body.len + 2);
-			p += hdr->body.len + 2;
+			msrp_buffer_append(p, hdr->body.s, hdr->body.len + 2, csize,
+					MSRP_MAX_FRAME_SIZE);
 		} else {
-			memcpy(p, hdr->body.s, l - hdr->body.s);
-			p += l - hdr->body.s;
-			memcpy(p, "\r\n", 2);
-			p += 2;
+			msrp_buffer_append(p, hdr->body.s, l - hdr->body.s, csize,
+					MSRP_MAX_FRAME_SIZE);
+			msrp_buffer_append(p, "\r\n", 2, csize, MSRP_MAX_FRAME_SIZE);
 		}
 	} else {
-		memcpy(p, hdr->body.s, hdr->body.len + 2);
-		p += hdr->body.len + 2;
+		msrp_buffer_append(
+				p, hdr->body.s, hdr->body.len + 2, csize, MSRP_MAX_FRAME_SIZE);
 	}
 	hdr = msrp_get_hdr_by_id(mf, MSRP_HDR_TO_PATH);
 	if(hdr == NULL) {
 		LM_ERR("To-Path header not found\n");
 		return -1;
 	}
-	memcpy(p, "From-Path: ", 11);
-	p += 11;
+	msrp_buffer_append(p, "From-Path: ", 11, csize, MSRP_MAX_FRAME_SIZE);
 	l = q_memchr(hdr->body.s, ' ', hdr->body.len);
 	if(l == NULL) {
-		memcpy(p, hdr->body.s, hdr->body.len + 2);
-		p += hdr->body.len + 2;
+		msrp_buffer_append(
+				p, hdr->body.s, hdr->body.len + 2, csize, MSRP_MAX_FRAME_SIZE);
 	} else {
-		memcpy(p, hdr->body.s, l - hdr->body.s);
-		p += l - hdr->body.s;
-		memcpy(p, "\r\n", 2);
-		p += 2;
+		msrp_buffer_append(
+				p, hdr->body.s, l - hdr->body.s, csize, MSRP_MAX_FRAME_SIZE);
+		msrp_buffer_append(p, "\r\n", 2, csize, MSRP_MAX_FRAME_SIZE);
 	}
 	hdr = msrp_get_hdr_by_id(mf, MSRP_HDR_MESSAGE_ID);
 	if(hdr != NULL) {
-		memcpy(p, hdr->buf.s, hdr->buf.len);
-		p += hdr->buf.len;
+		msrp_buffer_append(
+				p, hdr->buf.s, hdr->buf.len, csize, MSRP_MAX_FRAME_SIZE);
 	}
 
 	if(xhdrs != NULL && xhdrs->s != NULL) {
-		memcpy(p, xhdrs->s, xhdrs->len);
-		p += xhdrs->len;
+		msrp_buffer_append(p, xhdrs->s, xhdrs->len, csize, MSRP_MAX_FRAME_SIZE);
 	}
 
-	memcpy(p, mf->endline.s, mf->endline.len);
-	p += mf->endline.len;
+	msrp_buffer_append(
+			p, mf->endline.s, mf->endline.len, csize, MSRP_MAX_FRAME_SIZE);
 	*(p - 3) = '$';
 
 	env = msrp_get_env();
@@ -298,6 +401,9 @@ int msrp_reply(msrp_frame_t *mf, str *code, str *text, str *xhdrs)
 	}
 
 	return 0;
+
+error:
+	return -1;
 }
 
 

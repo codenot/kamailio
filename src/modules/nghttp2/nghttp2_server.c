@@ -23,6 +23,7 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <nghttp2/nghttp2.h>
 #include "nghttp2_server.h"
 
 #define OUTPUT_WOULDBLOCK_THRESHOLD (1 << 16)
@@ -201,7 +202,10 @@ static http2_session_data *create_http2_session_data(
 	session_data = malloc(sizeof(http2_session_data));
 	memset(session_data, 0, sizeof(http2_session_data));
 	session_data->app_ctx = app_ctx;
-	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&val, sizeof(val));
+	if(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&val, sizeof(val))
+			< 0) {
+		LM_ERR("failed to set TCP_NODELAY socket option\n");
+	}
 	session_data->bev = bufferevent_openssl_socket_new(app_ctx->evbase, fd, ssl,
 			BUFFEREVENT_SSL_ACCEPTING,
 			BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
@@ -793,11 +797,11 @@ static void start_listen(struct event_base *evbase, app_context *app_ctx)
 				(int)rp->ai_addrlen);
 		if(listener) {
 			freeaddrinfo(res);
-
 			return;
 		}
 	}
 	LM_ERR("Could not start listener");
+	freeaddrinfo(res);
 }
 
 static void initialize_app_context(

@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -128,7 +130,7 @@ char *parse_first_line(char *buffer, unsigned int len, struct msg_start *fl)
 	 * H-file (this is the value which you will take later in
 	 * processing and define XXX_LEN as length of method name;
 	 * then just call IFISMETHOD( XXX, 'X' ) ... 'X' is the first
-	 * latter; everything must be capitals
+	 * letter; everything must be capitals
 	*/
 			else
 	{
@@ -261,7 +263,7 @@ error:
 			if(*(buffer + t))
 				*(prn + t) = *(buffer + t);
 			else
-				*(prn + t) = (char)176; /* '°' */
+				*(prn + t) = (char)176; /* 'ï¿½' */
 		LM_DBG("parsed so far: %.*s\n", offset, ZSW(prn));
 		pkg_free(prn);
 	} else {

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -22,8 +24,13 @@
 #ifndef _MONGODB_CLIENT_H_
 #define _MONGODB_CLIENT_H_
 
+#ifdef HAVE_LIBMONGOC1
 #include <mongoc.h>
 #include <bson.h>
+#else
+#include <mongoc/mongoc.h>
+#include <bson/bson.h>
+#endif
 
 #include "../../core/str.h"
 #include "../../core/parser/parse_param.h"

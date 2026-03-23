@@ -7,6 +7,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -174,10 +176,10 @@ static cmd_export_t cmds[]={
 };
 
 static param_export_t params[]={
-	{"initial_probability", INT_PARAM, &initial_prob   },
-	{"initial_gflags",      INT_PARAM, &initial_gflags },
+	{"initial_probability", PARAM_INT, &initial_prob   },
+	{"initial_gflags",      PARAM_INT, &initial_gflags },
 	{"hash_file",           PARAM_STRING, &hash_file   },
-	{"lock_set_size",       INT_PARAM, &_cfg_lock_size },
+	{"lock_set_size",       PARAM_INT, &_cfg_lock_size },
 	{0,0,0}
 };
 
@@ -1048,7 +1050,7 @@ static sr_kemi_t sr_kemi_cfgutils_exports[] = {
 		{ SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
-	{ str_init("cfgutils"), str_init("lock"),
+	{ str_init("cfgutils"), str_init("lock_key2"),
 		SR_KEMIP_INT, cfg_lock_key2,
 		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
@@ -1058,7 +1060,7 @@ static sr_kemi_t sr_kemi_cfgutils_exports[] = {
 		{ SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
-	{ str_init("cfgutils"), str_init("unlock"),
+	{ str_init("cfgutils"), str_init("unlock_key2"),
 		SR_KEMIP_INT, cfg_unlock_key2,
 		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
@@ -1068,7 +1070,7 @@ static sr_kemi_t sr_kemi_cfgutils_exports[] = {
 		{ SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
-	{ str_init("cfgutils"), str_init("trylock"),
+	{ str_init("cfgutils"), str_init("trylock_key2"),
 		SR_KEMIP_INT, cfg_trylock_key2,
 		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }

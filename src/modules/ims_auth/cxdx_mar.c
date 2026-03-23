@@ -4,7 +4,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -14,7 +14,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -24,6 +24,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -477,7 +479,7 @@ done:
 		adi_list = 0;
 	}
 
-	LM_DBG("DBG:UAR Async CDP callback: ... Done resuming transaction\n");
+	LM_DBG("DBG:MAR Async CDP callback: ... Done resuming transaction\n");
 	set_avp_list(AVP_TRACK_FROM | AVP_CLASS_URI, &t->uri_avps_from);
 	set_avp_list(AVP_TRACK_TO | AVP_CLASS_URI, &t->uri_avps_to);
 	set_avp_list(AVP_TRACK_FROM | AVP_CLASS_USER, &t->user_avps_from);
@@ -491,7 +493,7 @@ done:
 		//del_nonshm_lump_rpl(&req->reply_lump);
 		tmb.unref_cell(t);
 	}
-	tmb.t_continue(data->tindex, data->tlabel, data->act);
+	tmb.t_continue_skip_timer(data->tindex, data->tlabel, data->act);
 	free_saved_transaction_data(data);
 	return;
 
@@ -502,7 +504,7 @@ error:
 		//del_nonshm_lump_rpl(&t->uas.request->reply_lump);
 		tmb.unref_cell(t);
 	}
-	tmb.t_continue(data->tindex, data->tlabel, data->act);
+	tmb.t_continue_skip_timer(data->tindex, data->tlabel, data->act);
 
 error1:
 	free_saved_transaction_data(data);

@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -41,7 +43,7 @@
 
 /* if defined t_relay* error reply generation will be delayed till script
  * end (this allows the script writer to send its own error reply) */
-#define TM_DELAYED_REPLY
+extern int _tm_delayed_reply;
 
 #ifdef USE_DNS_FAILOVER
 extern int **failover_reply_codes;
@@ -49,12 +51,12 @@ extern int *failover_reply_codes_cnt;
 #endif
 
 /* fr_timer AVP specs */
-static int fr_timer_avp_type = 0;
-static int_str fr_timer_avp = {0};
+static avp_flags_t fr_timer_avp_type = 0;
+static avp_name_t fr_timer_avp = {0};
 static str fr_timer_str;
 static int fr_timer_index = 0;
-int fr_inv_timer_avp_type = 0;
-int_str fr_inv_timer_avp = {0};
+avp_flags_t fr_inv_timer_avp_type = 0;
+avp_name_t fr_inv_timer_avp = {0};
 static str fr_inv_timer_str;
 static int fr_inv_timer_index = 0;
 
@@ -87,23 +89,6 @@ int send_pr_buffer(struct retr_buf *rb, void *buf, int len
 
 void tm_shutdown()
 {
-
-	LM_DBG("start\n");
-
-#ifdef USE_DNS_FAILOVER
-	if(failover_reply_codes)
-		shm_free(failover_reply_codes);
-	if(failover_reply_codes_cnt)
-		shm_free(failover_reply_codes_cnt);
-#endif
-	/* destroy the hash table */
-	LM_DBG("emptying hash table\n");
-	free_hash_table();
-	LM_DBG("removing semaphores\n");
-	lock_cleanup();
-	LM_DBG("destroying tmcb lists\n");
-	destroy_tmcb_lists();
-	free_tm_stats();
 	LM_DBG("done\n");
 }
 
@@ -247,9 +232,7 @@ int t_relay_to(
 	unsigned short port;
 	str host;
 	short comp;
-#ifndef TM_DELAYED_REPLY
 	int reply_ret;
-#endif
 
 	ret = 0;
 
@@ -369,26 +352,25 @@ handle_ret:
 				ret = -4;
 				goto done;
 			}
-#ifdef TM_DELAYED_REPLY
-			/* current error in tm_error */
-			tm_error = ser_error;
-			set_kr(REQ_ERR_DELAYED);
-			LM_DBG("%d error reply generation delayed \n", ser_error);
-#else
-
-			reply_ret = kill_transaction(t, ser_error);
-			if(reply_ret > 0) {
-				/* we have taken care of all -- do nothing in
-			  	script */
-				LM_DBG("generation of a stateful reply "
-					   "on error succeeded\n");
-				/*ret=0; -- we don't want to stop the script */
+			if(_tm_delayed_reply != 0) {
+				/* current error in tm_error */
+				tm_error = ser_error;
+				set_kr(REQ_ERR_DELAYED);
+				LM_DBG("%d error reply generation delayed \n", ser_error);
 			} else {
-				LM_DBG("generation of a stateful reply "
-					   "on error failed\n");
-				t_release_transaction(t);
+				reply_ret = kill_transaction(t, ser_error);
+				if(reply_ret > 0) {
+					/* we have taken care of all -- do nothing in
+					   script */
+					LM_DBG("generation of a stateful reply "
+						   "on error succeeded\n");
+					/*ret=0; -- we don't want to stop the script */
+				} else {
+					LM_DBG("generation of a stateful reply "
+						   "on error failed\n");
+					t_release_transaction(t);
+				}
 			}
-#endif /* TM_DELAYED_REPLY */
 		} else {
 			t_release_transaction(t); /* kill it  silently */
 		}
@@ -408,7 +390,7 @@ done:
 int init_avp_params(char *fr_timer_param, char *fr_inv_timer_param)
 {
 	pv_spec_t avp_spec;
-	unsigned short avp_type;
+	avp_flags_t avp_type;
 
 	if(fr_timer_param && *fr_timer_param) {
 		fr_timer_str.s = fr_timer_param;
@@ -483,7 +465,8 @@ int init_avp_params(char *fr_timer_param, char *fr_inv_timer_param)
  * @return 0 on success (use *timer) or 1 on failure (avp non-existent,
  *  avp present  but empty/0, avp value not numeric).
  */
-static inline int avp2timer(unsigned int *timer, int type, int_str name)
+static inline int avp2timer(
+		unsigned int *timer, avp_flags_t type, avp_name_t name)
 {
 	struct usr_avp *avp;
 	int_str val_istr;

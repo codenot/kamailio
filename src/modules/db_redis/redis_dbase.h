@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -28,6 +30,9 @@
 #define SREM_KEY_LUA                                                         \
 	"redis.call('SREM', KEYS[1], KEYS[3]); if redis.call('SCARD', KEYS[1]) " \
 	"== 0 then redis.call('SREM', KEYS[2], KEYS[1]) end"
+#define HDEL_KEY_LUA                                                        \
+	"redis.call('HDEL', KEYS[1], KEYS[3]); if redis.call('HLEN', KEYS[1]) " \
+	"== 0 then redis.call('HDEL', KEYS[2], KEYS[1]) end"
 
 
 /*

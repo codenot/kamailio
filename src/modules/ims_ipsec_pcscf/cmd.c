@@ -5,7 +5,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -15,7 +15,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -25,6 +25,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -67,6 +69,7 @@ extern ip_addr_t ipsec_listen_ip_addr6;
 
 extern int spi_id_start;
 
+extern atomic_t *ipsec_reconfig_flag;
 extern unsigned int ipsec_init_flag;
 
 // check http://www.asipto.com/pub/kamailio-devel-guide/#c16return_values
@@ -270,7 +273,7 @@ static int fill_contact(
 
 				if((srcip = pkg_malloc(50)) == NULL) {
 					LM_ERR("Error allocating memory for source IP address\n");
-					return -1;
+					goto error;
 				}
 
 				memcpy(srcip, alias_s.s, ci->received_host.len);
@@ -329,23 +332,37 @@ static int fill_contact(
 			LM_ERR("buffer parsing failed!");
 			goto error;
 		}
-		cb = cscf_parse_contacts(&tmsg);
-		if(!cb || (!cb->contacts)) {
-			LM_ERR("Reply No contact headers\n");
-			free_sip_msg(&tmsg);
-			goto error;
-		}
-		if(pkg_str_dup(&aor, &cb->contacts->uri) < 0) {
-			LM_ERR("failed to duplicate aor\n");
-			free_sip_msg(&tmsg);
-			goto error;
-		}
-		free_sip_msg(&tmsg);
-
-		vb = cscf_get_ue_via(m);
-		if(!vb) {
+		if((vb = cscf_get_ue_via(m)) == NULL) {
 			LM_ERR("Reply No via body headers\n");
-			return -1;
+			free_sip_msg(&tmsg);
+			goto error;
+		}
+		cb = cscf_parse_contacts(&tmsg);
+		free_sip_msg(&tmsg);
+		if(!cb || (!cb->contacts)) {
+			LM_DBG("Reply No contact headers, building AOR from Via\n");
+			// Handle the messages without contacts (e.g.BYE)
+			// Build AOR as "sip:<via_host>:<via_port>"
+			char aor_buf[256];
+			int aor_len = snprintf(aor_buf, sizeof(aor_buf), "sip:%.*s:%d",
+					vb->host.len, vb->host.s, vb->port);
+			if(aor_len <= 0 || aor_len >= (int)sizeof(aor_buf)) {
+				LM_ERR("Failed to build AOR from Via\n");
+				goto error;
+			}
+			if((aor.s = pkg_malloc(aor_len)) == NULL) {
+				PKG_MEM_ERROR;
+				goto error;
+			}
+			memcpy(aor.s, aor_buf, aor_len);
+			aor.len = aor_len;
+			LM_DBG("set AOR [%.*s], VIA [%d://%.*s:%d]\n", STR_FMT(&aor),
+					vb->proto, STR_FMT(&vb->host), vb->port);
+		} else {
+			if(pkg_str_dup(&aor, &cb->contacts->uri) < 0) {
+				LM_ERR("failed to duplicate aor\n");
+				goto error;
+			}
 		}
 
 		// populate CI with bare minimum
@@ -355,8 +372,8 @@ static int fill_contact(
 		ci->searchflag = SEARCH_RECEIVED;
 
 		if((srcip = pkg_malloc(50)) == NULL) {
-			LM_ERR("Error allocating memory for source IP address\n");
-			return -1;
+			PKG_MEM_ERROR;
+			goto error;
 		}
 
 		ci->received_host.len =
@@ -458,8 +475,10 @@ static int update_contact_ipsec_params(
 	memcpy(s->ik.s, ik.s, ik.len);
 	s->ik.len = ik.len;
 
-	// Generate SPI
-	if(s_old) {
+	// Reuse only if both CK and IK match.
+	if(s_old && s_old->ck.s != NULL && s_old->ik.s != NULL
+			&& strcmp(s_old->ck.s, s->ck.s) == 0
+			&& strcmp(s_old->ik.s, s->ik.s) == 0) {
 		if(s_old->spi_pc && s_old->spi_ps && s_old->port_pc && s_old->port_ps) {
 			LM_INFO("Reusing IPSEC tunnel\n");
 			s->spi_pc = s_old->spi_pc;
@@ -809,6 +828,7 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
 	pcontact_t *pcontact = NULL;
 	struct pcontact_info ci;
 	int ret = IPSEC_CMD_FAIL; // FAIL by default
+	int fun_ret_c;			  // Used to store return codes of some functions
 	tm_cell_t *t = NULL;
 	sip_msg_t *req = NULL;
 	security_t *req_sec_params = NULL;
@@ -893,19 +913,20 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
 	}
 
 	if(update_contact_ipsec_params(s, m, old_s) != 0) {
+		LM_ERR("Could not update ipsec params in contact.\n");
 		goto cleanup;
 	}
 
-	if(create_ipsec_tunnel(&req->rcv.src_ip, s) != 0) {
-		goto cleanup;
-	}
-
-	if(ul.update_pcontact(d, &ci, pcontact) != 0) {
-		LM_ERR("Error updating contact\n");
+	fun_ret_c = create_ipsec_tunnel(&req->rcv.src_ip, s);
+	if(fun_ret_c != 0) {
+		LM_ERR("IPSEC tunnel creation failed.\n");
 		goto cleanup;
 	}
 
 	if(ci.via_port == SIP_PORT) {
+		if(req_sec_params != NULL) {
+			pcontact->security_temp->data.ipsec = s;
+		}
 		// Update temp security parameters
 		if(ul.update_temp_security(d, pcontact->security_temp->type,
 				   pcontact->security_temp, pcontact)
@@ -914,12 +935,21 @@ int ipsec_create(struct sip_msg *m, udomain_t *d, int _cflags)
 		}
 	}
 
-
-	if(add_supported_secagree_header(m) != 0) {
+	if(ul.update_pcontact(d, &ci, pcontact) != 0) {
+		LM_ERR("Error updating contact\n");
 		goto cleanup;
 	}
 
-	if(add_security_server_header(m, s) != 0) {
+	fun_ret_c = add_supported_secagree_header(m);
+	if(fun_ret_c != 0) {
+		LM_ERR("Could not add secagree header. Failed with code: %d\n",
+				fun_ret_c);
+		goto cleanup;
+	}
+
+	fun_ret_c = add_security_server_header(m, s);
+	if(fun_ret_c != 0) {
+		LM_ERR("Could not add security server header. Code: %d\n", fun_ret_c);
 		goto cleanup;
 	}
 
@@ -1362,15 +1392,25 @@ cleanup:
 
 int ipsec_reconfig()
 {
+	int ret;
+
 	if(ul.get_number_of_contacts() != 0) {
 		return 0;
 	}
+
+	if(atomic_get(ipsec_reconfig_flag) != 0) {
+		LM_DBG("reconfig already called\n");
+		return 0;
+	}
+	atomic_set(ipsec_reconfig_flag, 1);
 
 	if(clean_spi_list() != 0) {
 		return 1;
 	}
 
-	return ipsec_cleanall();
+	ret = ipsec_cleanall();
+	atomic_set(ipsec_reconfig_flag, 0);
+	return ret;
 }
 
 int ipsec_cleanall()

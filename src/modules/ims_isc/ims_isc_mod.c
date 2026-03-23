@@ -6,7 +6,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -16,7 +16,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -26,6 +26,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -78,45 +80,45 @@ static int domain_fixup(void **param, int param_no);
 static int w_isc_match_filter_reg(struct sip_msg *_m, char *str1, char *str2);
 static int w_isc_match_filter(struct sip_msg *_m, char *str1, char *str2);
 
+/* clang-format off */
 static cmd_export_t cmds[] = {
-		{"isc_match_filter_reg", (cmd_function)w_isc_match_filter_reg, 2,
-				domain_fixup, 0, REQUEST_ROUTE},
-		{"isc_from_as", (cmd_function)isc_from_as, 1, 0, 0,
-				REQUEST_ROUTE | FAILURE_ROUTE},
-		{"isc_match_filter", (cmd_function)w_isc_match_filter, 2, domain_fixup,
-				0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{0, 0, 0, 0, 0, 0}};
+	{"isc_match_filter_reg", (cmd_function)w_isc_match_filter_reg, 2,
+			domain_fixup, 0, REQUEST_ROUTE},
+	{"isc_from_as", (cmd_function)isc_from_as, 1, 0, 0,
+			REQUEST_ROUTE | FAILURE_ROUTE},
+	{"isc_match_filter", (cmd_function)w_isc_match_filter, 2, domain_fixup,
+			0, REQUEST_ROUTE | FAILURE_ROUTE},
+	{0, 0, 0, 0, 0, 0}
+};
 
 static param_export_t params[] = {
-		{"my_uri", PARAM_STR,
-				&isc_my_uri}, /**< SIP Uri of myself for getting the messages back */
-		{"expires_grace", INT_PARAM,
-				&isc_expires_grace}, /**< expires value to add to the expires in the 3rd party register to prevent expiration in AS */
-		{"isc_fr_timeout", INT_PARAM,
-				&isc_fr_timeout}, /**< Time in ms that we are waiting for a AS response until we
- 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 consider it dead. Has to be lower than SIP transaction timeout
- 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 to prevent downstream timeouts. Not too small though because
- 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 AS are usually slow as hell... */
-		{"isc_fr_inv_timeout", INT_PARAM,
-				&isc_fr_inv_timeout}, /**< Time in ms that we are waiting for a AS INVITE response until we
- 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 consider it dead. Has to be lower than SIP transaction timeout
- 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 to prevent downstream timeouts. Not too small though because
- 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 AS are usually slow as hell... */
-		{"add_p_served_user", INT_PARAM,
-				&add_p_served_user}, /**< boolean indicating if the P-Served-User (RFC5502) should be added on the ISC interface or not */
-		{0, 0, 0}};
+	{"my_uri", PARAM_STR, &isc_my_uri}, /**< SIP Uri of myself for getting the messages back */
+	{"expires_grace", PARAM_INT, &isc_expires_grace}, /**< expires value to add to the expires in the 3rd party register to prevent expiration in AS */
+	{"isc_fr_timeout", PARAM_INT, &isc_fr_timeout}, /**< Time in ms that we are waiting for a AS response until we
+	 	 	 	 	 	 	 	 	 	 	 	 	 	 consider it dead. Has to be lower than SIP transaction timeout
+	 	 	 	 	 	 	 	 	 	 	 	 	 	 to prevent downstream timeouts. Not too small though because
+	 	 	 	 	 	 	 	 	 	 	 	 	 	 AS are usually slow as hell... */
+	{"isc_fr_inv_timeout", PARAM_INT, &isc_fr_inv_timeout}, /**< Time in ms that we are waiting for a AS INVITE response until we
+	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 consider it dead. Has to be lower than SIP transaction timeout
+	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 to prevent downstream timeouts. Not too small though because
+	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 	 AS are usually slow as hell... */
+	{"add_p_served_user", PARAM_INT, &add_p_served_user}, /**< boolean indicating if the P-Served-User (RFC5502) should be added on the ISC interface or not */
+	{0, 0, 0}
+};
 
 /** module exports */
 struct module_exports exports = {
-		"ims_isc", DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,						/* Exported functions */
-		params, 0,					/* exported RPC methods */
-		0,							/* exported pseudo-variables */
-		0,							/* response handling function */
-		mod_init,					/* module initialization function */
-		0,							/* per-child init function */
-		0							/* module destroy function */
+	"ims_isc", DEFAULT_DLFLAGS, /* dlopen flags */
+	cmds,						/* Exported functions */
+	params, 0,					/* exported RPC methods */
+	0,							/* exported pseudo-variables */
+	0,							/* response handling function */
+	mod_init,					/* module initialization function */
+	0,							/* per-child init function */
+	0							/* module destroy function */
 };
+
+/* clang-format on */
 
 /*! \brief
  * Convert char* parameter to udomain_t* pointer
@@ -236,18 +238,16 @@ static inline enum dialog_direction get_dialog_direction(char *direction)
  */
 int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 {
-	int k = 0;
+	int k = 0, regstate = 0;
 	isc_match *m = NULL;
 	str s = {0, 0};
 
 	//sometimes s is populated by an ims_getter method cscf_get_terminating_user that alloc memory that must be free-ed at the end
 	int free_s = 0;
-
-	//the callback from the Cx interface in case of unreg terminating initial message is a FAILURE_ROUTE. Hence we need an addl. flag
-	int firstflag = 0;
+	enum isc_mark_status status = 0;
 
 	int ret = ISC_RETURN_FALSE;
-	isc_mark new_mark, old_mark;
+	isc_mark new_mark, old_mark, dummy_mark;
 
 	enum dialog_direction dir = get_dialog_direction(str1);
 
@@ -262,27 +262,39 @@ int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 	/* starting or resuming? */
 	memset(&old_mark, 0, sizeof(isc_mark));
 	memset(&new_mark, 0, sizeof(isc_mark));
+	memset(&dummy_mark, 0, sizeof(isc_mark));
+
+	if(is_route_type(FAILURE_ROUTE)) {
+		status |= ISCMARK_FAILURE;
+	}
+
 	if(isc_mark_get_from_msg(msg, &old_mark)) {
 		LM_DBG("Message returned s=%d;h=%d;d=%d;a=%.*s\n", old_mark.skip,
 				old_mark.handling, old_mark.direction, old_mark.aor.len,
 				old_mark.aor.s);
+	} else if(is_route_type(FAILURE_ROUTE)
+			  && isc_mark_get_from_lumps(msg, &dummy_mark)) {
+		LM_DBG("Message lumps returned s=%d;h=%d;d=%d;a=%.*s\n",
+				dummy_mark.skip, dummy_mark.handling, dummy_mark.direction,
+				dummy_mark.aor.len, dummy_mark.aor.s);
 	} else {
 		LM_DBG("Starting triggering\n");
-		firstflag = 1;
+		status |= ISCMARK_MISSING;
 	}
 
-	if(is_route_type(FAILURE_ROUTE) && !firstflag) {
+	if(status == ISCMARK_FOUND_LUMPS) {
 		/* need to find the handling for the failed trigger */
 		if(dir == DLG_MOBILE_ORIGINATING) {
 			k = cscf_get_originating_user(msg, &s);
 			if(k) {
-				k = isc_is_registered(&s, d);
-				if(k == IMPU_NOT_REGISTERED) {
+				regstate = isc_is_registered(&s, d);
+				if(regstate == IMPU_NOT_REGISTERED) {
 					ret = ISC_RETURN_FALSE;
 					goto done;
 				}
 				new_mark.direction = IFC_ORIGINATING_SESSION;
-				LM_DBG("Orig User <%.*s> [%d]\n", s.len, s.s, k);
+				LM_DBG("Orig User <%.*s> [%s]\n", s.len, s.s,
+						get_impu_regstate_as_string(regstate));
 			} else
 				goto done;
 		}
@@ -292,24 +304,25 @@ int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 			free_s = 1;
 
 			if(k) {
-				k = isc_is_registered(&s, d);
+				regstate = isc_is_registered(&s, d);
 				//LOG(L_DBG,"after isc_is_registered in ISC_match_filter\n");
-				if(k == IMPU_REGISTERED) {
+				if(regstate == IMPU_REGISTERED) {
 					new_mark.direction = IFC_TERMINATING_SESSION;
 				} else {
 					new_mark.direction = IFC_TERMINATING_UNREGISTERED;
 				}
-				LM_DBG("Term User <%.*s> [%d]\n", s.len, s.s, k);
+				LM_DBG("Term User <%.*s> [%s]\n", s.len, s.s,
+						get_impu_regstate_as_string(regstate));
 			} else {
 				goto done;
 			}
 		}
 		struct cell *t = isc_tmb.t_gett();
-		LM_CRIT("SKIP: %d\n", old_mark.skip);
+		LM_CRIT("SKIP after AS failure: %d\n", old_mark.skip);
 		int index = old_mark.skip;
 		for(k = 0; k < t->nr_of_outgoings; k++) {
-			m = isc_checker_find(s, new_mark.direction, index, msg,
-					isc_is_registered(&s, d), d);
+			m = isc_checker_find(
+					s, new_mark.direction, index, msg, regstate, d);
 			if(m) {
 				index = m->index;
 				if(k < t->nr_of_outgoings - 1)
@@ -348,13 +361,14 @@ int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 		LM_DBG("ISC is for Orig user\n");
 		if(k) {
 			LM_DBG("Orig user is [%.*s]\n", s.len, s.s);
-			k = isc_is_registered(&s, d);
-			if(k == IMPU_NOT_REGISTERED) {
+			regstate = isc_is_registered(&s, d);
+			if(regstate == IMPU_NOT_REGISTERED) {
 				LM_DBG("User is not registered\n");
 				return ISC_RETURN_FALSE;
 			}
 
-			LM_DBG("Orig User <%.*s> [%d]\n", s.len, s.s, k);
+			LM_DBG("Orig User <%.*s> [%s]\n", s.len, s.s,
+					get_impu_regstate_as_string(regstate));
 			//CHECK if this is a new call (According to spec if the new uri and old mark URI are different then this is a new call and should
 			//be triggered accordingly
 			LM_DBG("Checking if RURI has changed...comparing: <%.*s> and "
@@ -363,18 +377,18 @@ int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 			if((old_mark.aor.len == s.len)
 					&& memcmp(old_mark.aor.s, s.s, s.len) != 0) {
 				LM_DBG("This is a new call....... trigger accordingly\n");
-				m = isc_checker_find(s, old_mark.direction, 0, msg,
-						isc_is_registered(&s, d), d);
+				m = isc_checker_find(
+						s, old_mark.direction, 0, msg, regstate, d);
 			} else {
-				m = isc_checker_find(s, old_mark.direction, old_mark.skip, msg,
-						isc_is_registered(&s, d), d);
+				m = isc_checker_find(
+						s, old_mark.direction, old_mark.skip, msg, regstate, d);
 			}
 			if(m) {
 				new_mark.direction = IFC_ORIGINATING_SESSION;
 				new_mark.skip = m->index + 1;
 				new_mark.handling = m->default_handling;
 				new_mark.aor = s;
-				ret = isc_forward(msg, m, &new_mark, firstflag);
+				ret = isc_forward(msg, m, &new_mark, status);
 				isc_free_match(m);
 				goto done;
 			}
@@ -389,13 +403,14 @@ int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 		free_s = 1;
 		LM_DBG("ISC is for Term user\n");
 		if(k) {
-			k = isc_is_registered(&s, d);
+			regstate = isc_is_registered(&s, d);
 			if(k == IMPU_REGISTERED) {
 				new_mark.direction = IFC_TERMINATING_SESSION;
 			} else {
 				new_mark.direction = IFC_TERMINATING_UNREGISTERED;
 			}
-			LM_DBG("Term User <%.*s> [%d]\n", s.len, s.s, k);
+			LM_DBG("Term User <%.*s> [%s]\n", s.len, s.s,
+					get_impu_regstate_as_string(regstate));
 			//CHECK if this is a new call (According to spec if the new uri and old mark URI are different then this is a new call and should
 			//be triggered accordingly
 			LM_DBG("Checking if RURI has changed...comparing: <%.*s> and "
@@ -404,18 +419,18 @@ int isc_match_filter(struct sip_msg *msg, char *str1, udomain_t *d)
 			if((old_mark.aor.len == s.len)
 					&& memcmp(old_mark.aor.s, s.s, s.len) != 0) {
 				LM_DBG("This is a new call....... trigger accordingly\n");
-				m = isc_checker_find(s, new_mark.direction, 0, msg,
-						isc_is_registered(&s, d), d);
+				m = isc_checker_find(
+						s, new_mark.direction, 0, msg, regstate, d);
 			} else {
 				LM_DBG("Resuming triggering\n");
-				m = isc_checker_find(s, new_mark.direction, old_mark.skip, msg,
-						isc_is_registered(&s, d), d);
+				m = isc_checker_find(
+						s, new_mark.direction, old_mark.skip, msg, regstate, d);
 			}
 			if(m) {
 				new_mark.skip = m->index + 1;
 				new_mark.handling = m->default_handling;
 				new_mark.aor = s;
-				ret = isc_forward(msg, m, &new_mark, firstflag);
+				ret = isc_forward(msg, m, &new_mark, status);
 				isc_free_match(m);
 				goto done;
 			}
@@ -430,6 +445,10 @@ done:
 
 	if(old_mark.aor.s)
 		pkg_free(old_mark.aor.s);
+
+	if(dummy_mark.aor.s)
+		pkg_free(dummy_mark.aor.s);
+
 	return ret;
 }
 
@@ -541,7 +560,8 @@ int isc_from_as(struct sip_msg *msg, char *str1, char *str2)
 			cscf_get_terminating_user(msg, &s);
 			//sometimes s is populated by an ims_getter method cscf_get_terminating_user that alloc memory that must be free-ed at the end
 			free_s = 1;
-			if(memcmp(old_mark.aor.s, s.s, s.len) != 0) {
+			if(!old_mark.aor.s || !s.len
+					|| memcmp(old_mark.aor.s, s.s, s.len) != 0) {
 				LM_DBG("This is a new call....... RURI has been retargeted\n");
 				return ISC_RETURN_RETARGET;
 			}

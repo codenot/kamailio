@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -45,7 +47,7 @@ MODULE_VERSION
 
 
 static int dnssec_init(void);
-static int dnssec_exit(void);
+static void dnssec_exit(void);
 
 
 /* parameters */
@@ -57,7 +59,7 @@ struct list_link *timer = 0;
 
 
 static param_export_t params[] = {
-		{"general_query_flags", INT_PARAM, &flags}, {0, 0, 0}};
+		{"general_query_flags", PARAM_INT, &flags}, {0, 0, 0}};
 
 
 struct module_exports exports = {
@@ -106,8 +108,7 @@ static int dnssec_init(void)
 }
 
 
-static int dnssec_exit(void)
+static void dnssec_exit(void)
 {
 	(void)dnssec_res_destroy();
-	return 0;
 }

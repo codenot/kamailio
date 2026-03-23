@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -297,7 +299,8 @@ char *decode_mime_type(
 	/* search the beginning of the type */
 	while(p < end
 			&& (*p == ' ' || *p == '\t'
-					|| (*p == '\n' && (*(p + 1) == ' ' || *(p + 1) == '\t'))))
+					|| (*p == '\n' && p + 1 < end
+							&& (*(p + 1) == ' ' || *(p + 1) == '\t'))))
 		p++;
 	if(p == end)
 		goto error;
@@ -336,7 +339,8 @@ char *decode_mime_type(
 	/* search the '/' separator */
 	while(p < end
 			&& (*p == ' ' || *p == '\t'
-					|| (*p == '\n' && (*(p + 1) == ' ' || *(p + 1) == '\t'))))
+					|| (*p == '\n' && p + 1 < end
+							&& (*(p + 1) == ' ' || *(p + 1) == '\t'))))
 		p++;
 	if(p == end || *(p++) != '/')
 		goto error;
@@ -344,7 +348,8 @@ char *decode_mime_type(
 	/* search the beginning of the sub-type */
 	while(p < end
 			&& (*p == ' ' || *p == '\t'
-					|| (*p == '\n' && (*(p + 1) == ' ' || *(p + 1) == '\t'))))
+					|| (*p == '\n' && p + 1 < end
+							&& (*(p + 1) == ' ' || *(p + 1) == '\t'))))
 		p++;
 	if(p == end)
 		goto error;
@@ -383,7 +388,8 @@ char *decode_mime_type(
 	/* now it is possible to have some spaces */
 	while(p < end
 			&& (*p == ' ' || *p == '\t'
-					|| (*p == '\n' && (*(p + 1) == ' ' || *(p + 1) == '\t'))))
+					|| (*p == '\n' && p + 1 < end
+							&& (*(p + 1) == ' ' || *(p + 1) == '\t'))))
 		p++;
 
 	/* if there are params, ignore them!! -> eat everything to

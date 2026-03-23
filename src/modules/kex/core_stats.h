@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -52,6 +54,7 @@ extern stat_var *rcv_reqs_prack;
 extern stat_var *rcv_reqs_update;
 extern stat_var *rcv_reqs_refer;
 extern stat_var *rcv_reqs_publish;
+extern stat_var *rcv_reqs_kdmq;
 
 /*! \brief received replies */
 extern stat_var *rcv_rpls;

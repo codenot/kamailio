@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -280,6 +282,7 @@ error:
 int ms_extract_time(str *time_str, int *time_val)
 {
 	struct tm stm;
+	time_t ttime;
 	int i;
 
 	if(time_str == NULL || time_str->s == NULL || time_str->len <= 0
@@ -392,7 +395,8 @@ int ms_extract_time(str *time_str, int *time_val)
 				return -1;
 		}
 	}
-	*time_val = (int)mktime(&stm);
+	ttime = mktime(&stm);
+	*time_val = ksr_time_sint(&ttime, NULL);
 
 	return 0;
 }

@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -68,5 +70,6 @@ int ki_dmq_bcast_message(
 int is_from_remote_node(sip_msg_t *msg);
 int ki_dmq_t_replicate(struct sip_msg *msg);
 int ki_dmq_t_replicate_mode(struct sip_msg *msg, int mode);
+str get_dmq_server_socket();
 
 #endif

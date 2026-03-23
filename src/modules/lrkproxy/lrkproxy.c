@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -75,6 +77,7 @@
 #include "../../core/dset.h"
 #include "../../core/route.h"
 #include "../../core/kemi.h"
+#include "../../core/rand/fastrand.h"
 #include "../../modules/tm/tm_load.h"
 #include "lrkproxy.h"
 #include "lrkproxy_hash.h"
@@ -156,7 +159,6 @@ static void mod_destroy(void);
 static int lrkproxy_disable_tout = 60;
 static int lrkproxy_retr = 5;
 static int lrkproxy_tout = 1;
-static pid_t mypid;
 static unsigned int myseqn = 0;
 //static str nolrkproxy_str = str_init("a=nolrkproxy:yes");
 //static str extra_id_pv_param = {NULL, 0};
@@ -234,18 +236,18 @@ static cmd_export_t cmds[] = {
 		{0, 0, 0, 0, 0, 0}};
 
 static param_export_t params[] = {
-		{"lrkproxy_sock", PARAM_STRING | USE_FUNC_PARAM,
+		{"lrkproxy_sock", PARAM_STRING | PARAM_USE_FUNC,
 				(void *)lrkproxy_set_store},
-		{"lrkproxy_disable_tout", INT_PARAM, &lrkproxy_disable_tout},
-		{"lrkproxy_retr", INT_PARAM, &lrkproxy_retr},
-		{"lrkproxy_tout", INT_PARAM, &lrkproxy_tout},
-		{"lrkp_alg", INT_PARAM, &lrkp_algorithm},
-		{"hash_table_tout", INT_PARAM, &hash_table_tout},
-		{"hash_table_size", INT_PARAM, &hash_table_size},
+		{"lrkproxy_disable_tout", PARAM_INT, &lrkproxy_disable_tout},
+		{"lrkproxy_retr", PARAM_INT, &lrkproxy_retr},
+		{"lrkproxy_tout", PARAM_INT, &lrkproxy_tout},
+		{"lrkp_alg", PARAM_INT, &lrkp_algorithm},
+		{"hash_table_tout", PARAM_INT, &hash_table_tout},
+		{"hash_table_size", PARAM_INT, &hash_table_size},
 		{"custom_sdp_ip_avp", PARAM_STR, &custom_sdp_ip_spec},
-		{"gt", INT_PARAM, &gt}, {"behind_nat", INT_PARAM, &behind_nat},
-		{"start_port", INT_PARAM, &startport},
-		{"end_port", INT_PARAM, &endport},
+		{"gt", PARAM_INT, &gt}, {"behind_nat", PARAM_INT, &behind_nat},
+		{"start_port", PARAM_INT, &startport},
+		{"end_port", PARAM_INT, &endport},
 
 		{0, 0, 0}};
 
@@ -666,9 +668,10 @@ static int child_init(int rank)
 		return 0;
 	}
 
-	/* Iterate known LRK proxies - create sockets */
-	mypid = getpid();
+	/* random start value for for cookie sequence number */
+	myseqn = fastrand();
 
+	/* Iterate known RTP proxies - create sockets */
 	lrkp_socks = (int *)pkg_malloc(sizeof(int) * lrkp_no);
 	if(lrkp_socks == NULL) {
 		LM_ERR("no more pkg memory\n");
@@ -789,7 +792,7 @@ static char *gencookie(void)
 {
 	static char cook[34];
 
-	sprintf(cook, "%d_%u ", (int)mypid, myseqn);
+	sprintf(cook, "%d_%u ", fastrand(), myseqn);
 	myseqn++;
 	return cook;
 }
@@ -1364,7 +1367,7 @@ retry:
 			/* Try to enable if it's time to try. */
 			node->ln_enable = lrkp_test(node);
 			if(node->ln_enable) //get lrk proxy config if it is enable.
-								//                lrkp_get_config(node);
+					//                lrkp_get_config(node);
 				lrkp_keep_alive(node);
 		}
 
@@ -1403,7 +1406,7 @@ retry:
 			/* Try to enable if it's time to try. */
 			node->ln_enable = lrkp_test(node);
 			if(node->ln_enable) //get lrk proxy config if it is enable.
-								//                lrkp_get_config(node);
+					//                lrkp_get_config(node);
 				lrkp_keep_alive(node);
 		}
 
@@ -1553,21 +1556,21 @@ static int change_media_sdp(sip_msg_t *msg, struct lrkproxy_hash_entry *e,
 			//            snprintf(sdp_new_o, 128, "o=lrkproxy %s %s IN IP4 %s\r", SUP_CPROTOVER, REQ_CPROTOVER, ip_selected);
 			snprintf(sdp_new_o, 128, "o=lrkproxy %ld %ld IN IP4 %s\r", seconds,
 					seconds, ip_selected);
-			strncat(newbody.s, sdp_new_o, strlen(sdp_new_o));
+			strcat(newbody.s, sdp_new_o);
 			off += len + 1;
 			continue;
 		}
 		if((int)(start_sdp_s - off) == 0) {
 			memset(sdp_new_s, 0, 128);
 			snprintf(sdp_new_s, 128, "s=lrkproxy Support only Audio Call\r");
-			strncat(newbody.s, sdp_new_s, strlen(sdp_new_s));
+			strcat(newbody.s, sdp_new_s);
 			off += len + 1;
 			continue;
 		}
 		if((int)(start_sdp_c - off) == 0) {
 			memset(sdp_new_c, 0, 128);
 			snprintf(sdp_new_c, 128, "c=IN IP4 %s\r", ip_selected);
-			strncat(newbody.s, sdp_new_c, strlen(sdp_new_c));
+			strcat(newbody.s, sdp_new_c);
 			off += len + 1;
 			continue;
 		}
@@ -1591,7 +1594,7 @@ static int change_media_sdp(sip_msg_t *msg, struct lrkproxy_hash_entry *e,
 						(int)(len - (avp_flags - off)), avp_flags);
 			//               snprintf(sdp_new_m, 128, "m=audio %d %.*s\r",e->node->lrkp_n_c->current_port, (int)(len - (avp_flags-off)), avp_flags);
 			//            printf("%.*s\n\n", len - (avp_flags-off), avp_flags);
-			strncat(newbody.s, sdp_new_m, strlen(sdp_new_m));
+			strcat(newbody.s, sdp_new_m);
 			off += len + 1;
 			continue;
 		}

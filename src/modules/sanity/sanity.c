@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -625,7 +627,11 @@ int check_cl(sip_msg_t *msg)
 		}
 		LM_DBG("check_cl passed\n");
 	} else {
-		LM_WARN("content length header missing in request\n");
+		if(msg->rcv.proto != PROTO_UDP && msg->rcv.proto != PROTO_SCTP) {
+			LM_WARN("content length header missing in request\n");
+		} else {
+			LM_DBG("content length header missing in request\n");
+		}
 	}
 
 	return SANITY_CHECK_PASSED;
@@ -807,7 +813,7 @@ int check_parse_uris(sip_msg_t *msg, int checks)
 			if(!msg->to || !msg->to->body.s) {
 				msg->msg_flags |= FL_MSG_NOREPLY;
 			} else {
-				if(sanity_reply(msg, 400, "Ivalid To Header") < 0) {
+				if(sanity_reply(msg, 400, "Invalid To Header") < 0) {
 					LM_WARN("failed to send 400 via sl reply (missing To)\n");
 				}
 			}

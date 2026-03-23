@@ -155,7 +155,7 @@ void tls_free_domain(tls_domain_t *d)
 {
 	if(!d)
 		return;
-	if(d->ctx) {
+	if(d->ctx && ksr_tcp_main_threads == 0) {
 		do {
 			if(d->ctx[0])
 				wolfSSL_CTX_free(d->ctx[0]);
@@ -973,7 +973,8 @@ static int ksr_tls_fix_domain(tls_domain_t *d, tls_domain_t *def)
 		return -1;
 	if(load_crl(d) < 0)
 		return -1;
-	// if (set_cipher_list(d) < 0) return -1;
+	if(set_cipher_list(d) < 0)
+		return -1;
 	if(set_verification(d) < 0)
 		return -1;
 	if(set_ssl_options(d) < 0)

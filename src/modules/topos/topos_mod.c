@@ -89,6 +89,7 @@ int _tps_sanity_checks = 0;
 int _tps_rr_update = 0;
 int _tps_header_mode = 0;
 str _tps_storage = str_init("db");
+str _tps_methods_update_time_list = str_init("SUBSCRIBE");
 
 extern int _tps_branch_expire;
 extern int _tps_dialog_expire;
@@ -96,6 +97,7 @@ extern unsigned int _tps_methods_nocontact;
 str _tps_methods_nocontact_list = str_init("");
 extern unsigned int _tps_methods_noinitial;
 str _tps_methods_noinitial_list = str_init("");
+unsigned int _tps_methods_update_time = METHOD_SUBSCRIBE;
 
 static topoh_api_t thb = {0};
 
@@ -130,6 +132,8 @@ str _tps_xavu_cfg = STR_NULL;
 str _tps_xavu_field_acontact = STR_NULL;
 str _tps_xavu_field_bcontact = STR_NULL;
 str _tps_xavu_field_contact_host = STR_NULL;
+str _tps_xavu_field_acontact_host = STR_NULL;
+str _tps_xavu_field_bcontact_host = STR_NULL;
 
 str _tps_context_param = STR_NULL;
 str _tps_context_value = STR_NULL;
@@ -182,11 +186,14 @@ static param_export_t params[] = {
 	{"xavu_field_a_contact", PARAM_STR, &_tps_xavu_field_acontact},
 	{"xavu_field_b_contact", PARAM_STR, &_tps_xavu_field_bcontact},
 	{"xavu_field_contact_host", PARAM_STR, &_tps_xavu_field_contact_host},
+	{"xavu_field_a_contact_host", PARAM_STR, &_tps_xavu_field_acontact_host},
+	{"xavu_field_b_contact_host", PARAM_STR, &_tps_xavu_field_bcontact_host},
 	{"rr_update", PARAM_INT, &_tps_rr_update},
 	{"context", PARAM_STR, &_tps_context_param},
 	{"methods_nocontact", PARAM_STR, &_tps_methods_nocontact_list},
 	{"methods_noinitial", PARAM_STR, &_tps_methods_noinitial_list},
-	{"version_table", INT_PARAM, &_tps_version_table_check},
+	{"version_table", PARAM_INT, &_tps_version_table_check},
+	{"methods_update_time", PARAM_STR, &_tps_methods_update_time_list},
 
 	{0, 0, 0}
 };
@@ -256,6 +263,20 @@ static int mod_init(void)
 			return -1;
 		}
 	}
+
+	if(_tps_methods_update_time_list.len <= 0) {
+		/* Modparam provided but empty. No methods */
+		_tps_methods_update_time = 0;
+	} else {
+		/* Modparam provided with some methods or default value */
+		if(parse_methods(
+				   &_tps_methods_update_time_list, &_tps_methods_update_time)
+				< 0) {
+			LM_ERR("failed to parse methods_update_time parameter\n");
+			return -1;
+		}
+	}
+
 	if(_tps_storage.len == 2 && strncmp(_tps_storage.s, "db", 2) == 0) {
 		/* Find a database module */
 		if(db_bind_mod(&_tps_db_url, &_tpsdbf)) {
@@ -288,6 +309,9 @@ static int mod_init(void)
 			_tpsdbf.close(topos_db_con);
 			topos_db_con = NULL;
 		}
+	} else if(_tps_storage.len == 6
+			  && strncmp(_tps_storage.s, "htable", 6) == 0) {
+		// use htable module api
 	} else {
 		if(_tps_storage.len != 7 && strncmp(_tps_storage.s, "redis", 5) != 0) {
 			LM_ERR("unknown storage type: %.*s\n", _tps_storage.len,
@@ -315,6 +339,15 @@ static int mod_init(void)
 					|| _tps_xavu_field_bcontact.len <= 0)) {
 		LM_ERR("contact_mode parameter is 2,"
 			   " but a_contact or b_contact xavu fields not defined\n");
+		return -1;
+	}
+
+	if(_tps_contact_mode == TPS_CONTACT_MODE_XAVPHOST
+			&& (_tps_xavu_cfg.len <= 0 || _tps_xavu_field_acontact_host.len <= 0
+					|| _tps_xavu_field_bcontact_host.len <= 0)) {
+		LM_ERR("contact_mode parameter is 3,"
+			   " but a_contact_host or b_contact_host xavu fields not "
+			   "defined\n");
 		return -1;
 	}
 
@@ -521,6 +554,9 @@ int tps_msg_received(sr_event_param_t *evp)
 	memset(&msg, 0, sizeof(sip_msg_t));
 	msg.buf = obuf->s;
 	msg.len = obuf->len;
+	if(evp->rcv) {
+		msg.rcv = *(receive_info_t *)evp->rcv;
+	}
 
 	ret = 0;
 	if(tps_prepare_msg(&msg) != 0) {
@@ -598,6 +634,9 @@ int tps_msg_sent(sr_event_param_t *evp)
 	memset(&msg, 0, sizeof(sip_msg_t));
 	msg.buf = obuf->s;
 	msg.len = obuf->len;
+	if(evp->rcv) {
+		msg.rcv = *(receive_info_t *)evp->rcv;
+	}
 
 	if(tps_prepare_msg(&msg) != 0) {
 		goto done;
@@ -678,12 +717,13 @@ int tps_get_branch_expire(void)
 static int tps_execute_event_route(sip_msg_t *msg, sr_event_param_t *evp,
 		int evtype, int evidx, str *evname)
 {
-	struct sip_msg *fmsg;
+	sip_msg_t *fmsg = NULL;
 	struct run_act_ctx ctx;
 	int rtb;
 	sr_kemi_eng_t *keng = NULL;
 	onsend_info_t onsnd_info = {0};
-	onsend_info_t *p_onsend_bak;
+	onsend_info_t *p_onsend_bak = 0;
+	receive_info_t fmsg_rcv_bak = {0};
 
 	if(!(_tps_eventrt_mode & evtype)) {
 		return 0;
@@ -708,7 +748,6 @@ static int tps_execute_event_route(sip_msg_t *msg, sr_event_param_t *evp,
 
 	LM_DBG("executing event_route[topos:%.*s] (%d)\n", evname->len, evname->s,
 			evidx);
-	fmsg = faked_msg_next();
 
 	if(evp->dst) {
 		onsnd_info.to = &evp->dst->to;
@@ -719,6 +758,11 @@ static int tps_execute_event_route(sip_msg_t *msg, sr_event_param_t *evp,
 		onsnd_info.len = msg->len;
 		onsnd_info.msg = msg;
 	} else {
+		fmsg = faked_msg_next();
+		fmsg_rcv_bak = fmsg->rcv;
+		if(evp->rcv != NULL) {
+			fmsg->rcv = *evp->rcv;
+		}
 		onsnd_info.buf = fmsg->buf;
 		onsnd_info.len = fmsg->len;
 		onsnd_info.msg = fmsg;
@@ -737,10 +781,17 @@ static int tps_execute_event_route(sip_msg_t *msg, sr_event_param_t *evp,
 					< 0) {
 				LM_ERR("error running event route kemi callback\n");
 				p_onsend = p_onsend_bak;
+				if(fmsg != NULL && evp->rcv != NULL) {
+					fmsg->rcv = fmsg_rcv_bak;
+				}
 				return -1;
 			}
 		}
 	}
+	if(fmsg != NULL && evp->rcv != NULL) {
+		fmsg->rcv = fmsg_rcv_bak;
+	}
+
 	set_route_type(rtb);
 	if(ctx.run_flags & DROP_R_F) {
 		LM_DBG("exit due to 'drop' in event route\n");

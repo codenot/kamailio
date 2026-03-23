@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -66,6 +68,10 @@ str dmq_notification_channel = str_init("notification_peer");
 int dmq_multi_notify = 0;
 static sip_uri_t dmq_notification_uri = {0};
 int dmq_ping_interval = 60;
+int dmq_remove_inactive = 1;
+int dmq_fail_count_enabled = 0;
+int dmq_fail_count_threshold_not_active = 0;
+int dmq_fail_count_threshold_disabled = 1;
 
 /* TM bind */
 struct tm_binds _dmq_tmb = {0};
@@ -115,14 +121,18 @@ static cmd_export_t cmds[] = {
 };
 
 static param_export_t params[] = {
-	{"num_workers", INT_PARAM, &dmq_num_workers},
-	{"ping_interval", INT_PARAM, &dmq_ping_interval},
+	{"num_workers", PARAM_INT, &dmq_num_workers},
+	{"ping_interval", PARAM_INT, &dmq_ping_interval},
 	{"server_address", PARAM_STR, &dmq_server_address},
 	{"server_socket", PARAM_STR, &dmq_server_socket},
-	{"notification_address", PARAM_STR|USE_FUNC_PARAM, dmq_add_notification_address},
+	{"notification_address", PARAM_STR|PARAM_USE_FUNC, dmq_add_notification_address},
 	{"notification_channel", PARAM_STR, &dmq_notification_channel},
-	{"multi_notify", INT_PARAM, &dmq_multi_notify},
-	{"worker_usleep", INT_PARAM, &dmq_worker_usleep},
+	{"multi_notify", PARAM_INT, &dmq_multi_notify},
+	{"worker_usleep", PARAM_INT, &dmq_worker_usleep},
+	{"remove_inactive", PARAM_INT, &dmq_remove_inactive},
+	{"fail_count_enabled", PARAM_INT, &dmq_fail_count_enabled},
+	{"fail_count_threshold_not_active", PARAM_INT, &dmq_fail_count_threshold_not_active},
+	{"fail_count_threshold_disabled", PARAM_INT, &dmq_fail_count_threshold_disabled},
 	{0, 0, 0}
 };
 
@@ -267,7 +277,7 @@ static int mod_init(void)
 		return -1;
 	}
 
-	dmq_startup_time = (int)time(NULL);
+	dmq_startup_time = ksr_time_sint(NULL, NULL);
 
 	/**
 	 * add the ping timer
@@ -419,11 +429,11 @@ static void dmq_rpc_list_nodes(rpc_t *rpc, void *c)
 		ip_addr2sbuf(&cur->ip_address, ip, IP6_MAX_STR_SIZE);
 		if(rpc->add(c, "{", &h) < 0)
 			goto error;
-		if(rpc->struct_add(h, "SSssSdd", "host", &cur->uri.host, "port",
+		if(rpc->struct_add(h, "SSssSddd", "host", &cur->uri.host, "port",
 				   &cur->uri.port, "proto", get_proto_name(cur->uri.proto),
 				   "resolved_ip", ip, "status", dmq_get_status_str(cur->status),
 				   "last_notification", cur->last_notification, "local",
-				   cur->local)
+				   cur->local, "fail_count", cur->fail_count)
 				< 0)
 			goto error;
 		cur = cur->next;

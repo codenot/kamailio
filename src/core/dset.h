@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -98,10 +100,15 @@ typedef struct branch_data
 	int otcpid;
 } branch_data_t;
 
+unsigned int get_nr_branches(void);
+
 /*! \brief
  * Return pointer to branch[idx] structure
  */
 branch_t *get_sip_branch(int idx);
+
+int get_all_sip_branches(branch_t **vbranches, unsigned int *nbranches);
+int set_all_sip_branches(branch_t *vbranches, unsigned int nbranches);
 
 /*! \brief
  * Drop branch[idx]
@@ -226,6 +233,8 @@ inline static int get_request_uri(struct sip_msg *_m, str *_u)
 
 int rewrite_uri(struct sip_msg *_m, str *_s);
 
+void reset_uri(sip_msg_t *msg);
+
 /*! \brief
  * Set a per-branch flag to 1.
  *
@@ -284,6 +293,7 @@ int uri_restore_rcv_alias(str *uri, str *nuri, str *suri);
 int uri_trim_rcv_alias(str *uri, str *nuri);
 int ksr_uri_alias_encode(str *iuri, str *ualias);
 int ksr_uri_alias_decode(str *ualias, str *ouri);
+int ksr_uri_remove_param(str *ouri, str *pname, str *nuri);
 
 int init_dst_set(void);
 

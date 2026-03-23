@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -40,6 +42,7 @@
 #include "globals.h"
 #include "dprint.h"
 #include "pvar.h"
+#include "fmsg.h"
 #include "strutils.h"
 
 static void log_callid_set(sip_msg_t *msg);
@@ -48,6 +51,7 @@ char *_km_log_engine_type = NULL;
 char *_km_log_engine_data = NULL;
 
 km_log_f _km_log_func = &syslog;
+static sip_msg_t _km_log_prefix_fmsg = {0};
 
 /**
  *
@@ -502,18 +506,40 @@ void log_prefix_init(void)
 	}
 }
 
+sip_msg_t *km_log_prefix_msg_get(sip_msg_t *msg)
+{
+	if(msg != NULL) {
+		return msg;
+	}
+	if(!(log_prefix_mode & LOG_PREFIX_MODE_FMSG)) {
+		return NULL;
+	}
+	if(_km_log_prefix_fmsg.len == 0) {
+		if(faked_msg_get_new(&_km_log_prefix_fmsg) < 0) {
+			return NULL;
+		}
+		if(parse_headers(&_km_log_prefix_fmsg, HDR_EOH_F, 0) < 0) {
+			return NULL;
+		}
+	}
+	return &_km_log_prefix_fmsg;
+}
+
 void log_prefix_set(sip_msg_t *msg)
 {
-	log_callid_set(msg);
+	sip_msg_t *lmsg = NULL;
+
+	lmsg = km_log_prefix_msg_get(msg);
+	log_callid_set(lmsg);
 	if(log_prefix_pvs == NULL)
 		return;
-	if(msg == NULL || !IS_SIP_MSG(msg)) {
+	if(lmsg == NULL || !IS_SIP_MSG(lmsg)) {
 		log_prefix_val = NULL;
 		return;
 	}
 	log_prefix_str.s = log_prefix_buf;
 	log_prefix_str.len = LOG_PREFIX_SIZE;
-	if(pv_printf(msg, log_prefix_pvs, log_prefix_str.s, &log_prefix_str.len)
+	if(pv_printf(lmsg, log_prefix_pvs, log_prefix_str.s, &log_prefix_str.len)
 			< 0)
 		return;
 	if(log_prefix_str.len <= 0)
@@ -826,6 +852,14 @@ void ksr_slog_init(char *ename)
 			}
 		}
 	}
+}
+
+/**
+ *
+ */
+void km_slog_func_set(ksr_slog_f f)
+{
+	_ksr_slog_func = f;
 }
 
 static void log_callid_set(sip_msg_t *msg)

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -57,6 +59,7 @@
 #include <sys/utsname.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/resource.h> /* getrlimit */
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -102,6 +105,7 @@
 #include "core/poll_types.h"
 #include "core/tcp_init.h"
 #include "core/tcp_options.h"
+#include "core/tcp_mtops.h"
 #ifdef CORE_TLS
 #include "core/tls/tls_init.h"
 #define tls_has_init_si() 1
@@ -144,6 +148,7 @@
 #include "core/timer_proc.h"
 #include "core/srapi.h"
 #include "core/receive.h"
+#include "core/coreparam.h"
 
 #ifdef DEBUG_DMALLOC
 #include <dmalloc.h>
@@ -164,8 +169,8 @@ Usage: " NAME " [options]\n\
 Options:\n\
     -a mode      Auto aliases mode: enable with yes or on,\n\
                   disable with no or off\n\
-    --alias=val  Add an alias, the value has to be '[proto:]hostname[:port]'\n\
-                  (like for 'alias' global parameter)\n\
+    --alias=val  Add a domain alias, the value has to be '[proto:]hostname[:port]'\n\
+                  (like for 'alias'/'domain' global parameter)\n\
     --atexit=val Control atexit callbacks execution from external libraries\n\
                   which may access destroyed shm memory causing crash on shutdown.\n\
                   Can be y[es] or 1 to enable atexit callbacks, n[o] or 0 to disable,\n\
@@ -184,6 +189,8 @@ Options:\n\
                   -D..do not fork (almost) anyway;\n\
                   -DD..do not daemonize creator;\n\
                   -DDD..daemonize (default)\n\
+    --domain=val Add a domain alias, the value has to be '[proto:]hostname[:port]'\n\
+                  (like for 'alias'/'domain' global parameter)\n\
     -e           Log messages printed in terminal colors (requires -E)\n\
     -E           Log to stderr\n\
     -f file      Configuration file (default: " CFG_FILE ")\n\
@@ -191,17 +198,21 @@ Options:\n\
     -G file      Create a pgid file\n\
     -h           This help message\n\
     --help       Long option for `-h`\n\
+    --iuid=val   Instance unique id\n\
     -I           Print more internal compile flags and options\n\
     -K           Turn on \"via:\" host checking when forwarding replies\n\
     -l address   Listen on the specified address/interface (multiple -l\n\
                   mean listening on more addresses). The address format is\n\
-                  [proto:]addr_lst[:port][/advaddr], \n\
+                  [proto:]addr_lst[:port][/advaddr][/socket_name], \n\
                   where proto=udp|tcp|tls|sctp, \n\
                   addr_lst= addr|(addr, addr_lst), \n\
-                  addr=host|ip_address|interface_name and \n\
-                  advaddr=addr[:port] (advertised address). \n\
+                  addr=host|ip_address|interface_name, \n\
+                  advaddr=addr[:port] (advertised address) and \n\
+                  socket_name=identifying name.\n\
                   E.g: -l localhost, -l udp:127.0.0.1:5080, -l eth0:5062,\n\
                   -l udp:127.0.0.1:5080/1.2.3.4:5060,\n\
+                  -l udp:127.0.0.1:5080//local,\n\
+                  -l udp:127.0.0.1:5080/1.2.3.4:5060/local,\n\
                   -l \"sctp:(eth0)\", -l \"(eth0, eth1, 127.0.0.1):5065\".\n\
                   The default behaviour is to listen on all the interfaces.\n\
     --loadmodule=name load the module specified by name\n\
@@ -282,6 +293,7 @@ void print_internals(void)
 	printf("  Version: %s\n", full_version);
 	printf("  Default config: %s\n", CFG_FILE);
 	printf("  Default paths to modules: %s\n", MODS_DIR);
+	printf("  Default path to runtime dir: %s\n", RUN_DIR);
 	printf("  Compile flags: %s\n", ver_flags);
 	printf("  MAX_RECV_BUFFER_SIZE=%d\n", MAX_RECV_BUFFER_SIZE);
 	printf("  MAX_SEND_BUFFER_SIZE=%d\n", MAX_SEND_BUFFER_SIZE);
@@ -338,9 +350,10 @@ int tcp_disable = 0;	 /* 1 if tcp is disabled */
 int tls_disable = 0; /* tls enabled by default */
 #else
 int tls_disable = 1; /* tls disabled by default */
-#endif						  /* CORE_TLS */
-int ksr_tls_threads_mode = 0; /* threads execution mode for tls with libssl */
-#endif						  /* USE_TLS */
+#endif /* CORE_TLS */
+/* threads execution mode for tls with libssl */
+int ksr_tls_threads_mode = KSR_TLS_THREADS_MFORK;
+#endif /* USE_TLS */
 #ifdef USE_SCTP
 int sctp_children_no = 0;
 int sctp_disable = 2; /* 1 if sctp is disabled, 2 if auto mode, 0 enabled */
@@ -490,6 +503,10 @@ unsigned short port_no = 0; /* default port*/
 unsigned short tls_port_no = 0; /* default port */
 #endif
 
+#ifdef USE_TLS
+int tls_connection_match_domain = 0;
+#endif
+
 struct host_alias *aliases = 0; /* name aliases list */
 
 /* Parameter to child_init */
@@ -501,6 +518,7 @@ int ser_kill_timeout = DEFAULT_SER_KILL_TIMEOUT;
 int ksr_verbose_startup = 0;
 int ksr_all_errors = 0;
 int ksr_udp_receiver_mode = 0;
+int ksr_udp_mtreceivers = 0;
 
 /* cfg parsing */
 int cfg_errors = 0;
@@ -1371,12 +1389,14 @@ int main_loop(void)
 	int i;
 	pid_t pid;
 	struct socket_info *si;
+	struct socket_info *sx;
 	char si_desc[MAX_PT_DESC];
 #ifdef EXTRA_DEBUG
 	int r;
 #endif
 	int nrprocs;
 	int woneinit;
+	int agfound = 0;
 
 	if(_sr_instance_started == NULL) {
 		_sr_instance_started = shm_malloc(sizeof(int));
@@ -1470,6 +1490,7 @@ int main_loop(void)
 
 		/* init log prefix format */
 		log_prefix_init();
+		log_prefix_set(NULL);
 
 		/* init childs with rank==PROC_INIT before forking any process,
 		 * this is a place for delayed (after mod_init) initializations
@@ -1588,11 +1609,34 @@ int main_loop(void)
 				/* children_no per each socket */
 				cfg_register_child(
 						(si->workers > 0) ? si->workers : children_no);
+			} else if(ksr_udp_receiver_mode == 2) {
+				if(si->agroup.agname[0] != '\0') {
+					agfound = 0;
+					for(sx = udp_listen; sx != si; sx = sx->next) {
+						if(sx->agroup.agname[0] != '\0') {
+							if(strcmp(sx->agroup.agname, si->agroup.agname)
+									== 0) {
+								agfound = 1;
+								break;
+							}
+						}
+					}
+					if(agfound == 0) {
+						/* one udp multi-threaded worker */
+						cfg_register_child(1);
+						ksr_udp_mtreceivers++;
+					}
+				} else {
+					/* children_no per each socket */
+					cfg_register_child(
+							(si->workers > 0) ? si->workers : children_no);
+				}
 			}
 		}
 		if(udp_listen && (ksr_udp_receiver_mode == 1)) {
 			/* main udp multi-threaded worker */
 			cfg_register_child(1);
+			ksr_udp_mtreceivers++;
 		}
 
 #ifdef USE_RAW_SOCKS
@@ -1723,6 +1767,7 @@ int main_loop(void)
 
 		/* init log prefix format */
 		log_prefix_init();
+		log_prefix_set(NULL);
 
 		/* init childs with rank==PROC_INIT before forking any process,
 		 * this is a place for delayed (after mod_init) initializations
@@ -1777,13 +1822,44 @@ int main_loop(void)
 		}
 		if(udp_listen && (ksr_udp_receiver_mode == 1)) {
 			child_rank++;
-			if(ksr_udp_start_mtreceiver(child_rank, &woneinit) < 0) {
+			if(ksr_udp_start_mtreceiver(child_rank, NULL, &woneinit) < 0) {
 				goto error;
 			}
 		}
+		if(udp_listen && (ksr_udp_receiver_mode == 2)) {
+			for(si = udp_listen; si; si = si->next) {
+				if(si->agroup.agname[0] == '\0') {
+					continue;
+				}
+				agfound = 0;
+				for(sx = udp_listen; sx != si; sx = sx->next) {
+					if(sx->agroup.agname[0] != '\0') {
+						if(strcmp(sx->agroup.agname, si->agroup.agname) == 0) {
+							agfound = 1;
+							break;
+						}
+					}
+				}
+				if(agfound == 0) {
+					child_rank++;
+					if(ksr_udp_start_mtreceiver(
+							   child_rank, si->agroup.agname, &woneinit)
+							< 0) {
+						goto error;
+					}
+				}
+			}
+		}
 		/* udp processes */
-		for(si = udp_listen; si && (ksr_udp_receiver_mode == 0);
-				si = si->next) {
+		if(ksr_udp_receiver_mode == 0 || ksr_udp_receiver_mode == 2) {
+			agfound = 1;
+		} else {
+			agfound = 0;
+		}
+		for(si = udp_listen; si && (agfound == 1); si = si->next) {
+			if((ksr_udp_receiver_mode == 2) && (si->agroup.agname[0] != '\0')) {
+				continue;
+			}
 			nrprocs = (si->workers > 0) ? si->workers : children_no;
 			for(i = 0; i < nrprocs; i++) {
 				if(si->address.af == AF_INET6) {
@@ -2035,8 +2111,10 @@ error:
  */
 static int calc_proc_no(void)
 {
-	int udp_listeners;
+	int udp_listeners = 0;
 	struct socket_info *si;
+	struct socket_info *sx;
+	int agfound;
 #ifdef USE_TCP
 	int tcp_listeners;
 	int tcp_e_listeners;
@@ -2047,9 +2125,30 @@ static int calc_proc_no(void)
 
 	if(ksr_udp_receiver_mode == 1) {
 		udp_listeners = 1;
+	} else if(ksr_udp_receiver_mode == 2) {
+		for(si = udp_listen; si; si = si->next) {
+			if(si->agroup.agname[0] == '\0') {
+				udp_listeners += (si->workers > 0) ? si->workers : children_no;
+			} else {
+				agfound = 0;
+				for(sx = udp_listen; sx != si; sx = sx->next) {
+					if(sx->agroup.agname[0] != '\0') {
+						if(strcmp(sx->agroup.agname, si->agroup.agname) == 0) {
+							agfound = 1;
+							break;
+						}
+					}
+				}
+				if(agfound == 0) {
+					udp_listeners += 1;
+				}
+			}
+		}
+		udp_listeners += ksr_udp_mtreceivers;
 	} else {
-		for(si = udp_listen, udp_listeners = 0; si; si = si->next)
+		for(si = udp_listen; si; si = si->next) {
 			udp_listeners += (si->workers > 0) ? si->workers : children_no;
+		}
 	}
 #ifdef USE_TCP
 	for(si = tcp_listen, tcp_listeners = 0, tcp_e_listeners = 0; si;
@@ -2107,28 +2206,33 @@ int main(int argc, char **argv)
 	int proto = PROTO_NONE;
 	int aproto = PROTO_NONE;
 	char *ahost = NULL;
+	char *socket_name = NULL;
 	int aport = 0;
+	int listen_field_count = 0;
+	char *listen_fields[3];
 	char *options;
 	int ret;
-	unsigned int seed;
-	int rfd;
 	int debug_save, debug_flag;
 	int dont_fork_cnt;
 	struct name_lst *n_lst;
 	char *p;
+	char *tbuf;
+	char *tbuf_tmp;
 	struct stat st = {0};
 	long l1 = 0;
-
-#define KSR_TBUF_SIZE 512
-	char tbuf[KSR_TBUF_SIZE];
+	struct rlimit lim;
 
 	int option_index = 0;
 
 #define KARGOPTVAL 1024
-	static struct option long_options[] = {/* long options with short variant */
-			{"help", no_argument, 0, 'h'}, {"version", no_argument, 0, 'v'},
+	/* clang-format off */
+	static struct option long_options[] = {
+			/* long options with short variant */
+			{"help", no_argument, 0, 'h'},
+			{"version", no_argument, 0, 'v'},
 			/* long options without short variant */
 			{"alias", required_argument, 0, KARGOPTVAL},
+			{"domain", required_argument, 0, KARGOPTVAL},
 			{"subst", required_argument, 0, KARGOPTVAL + 1},
 			{"substdef", required_argument, 0, KARGOPTVAL + 2},
 			{"substdefs", required_argument, 0, KARGOPTVAL + 3},
@@ -2139,7 +2243,11 @@ int main(int argc, char **argv)
 			{"debug", required_argument, 0, KARGOPTVAL + 8},
 			{"cfg-print", no_argument, 0, KARGOPTVAL + 9},
 			{"atexit", required_argument, 0, KARGOPTVAL + 10},
-			{"all-errors", no_argument, 0, KARGOPTVAL + 11}, {0, 0, 0, 0}};
+			{"all-errors", no_argument, 0, KARGOPTVAL + 11},
+			{"iuid", required_argument, 0, KARGOPTVAL + 12},
+			{0, 0, 0, 0}
+		};
+	/* clang-format on */
 
 	if(argc > 1) {
 		/* checks for common wrong arguments */
@@ -2519,6 +2627,16 @@ int main(int argc, char **argv)
 					goto error;
 				}
 				break;
+			case KARGOPTVAL + 12:
+				if(optarg == NULL) {
+					fprintf(stderr, "bad instance unique id parameter\n");
+					goto error;
+				}
+				if(ksr_iuid_set(optarg, 0) < 0) {
+					fprintf(stderr, "failed to set instance unique id\n");
+					goto error;
+				}
+				break;
 
 			/* special cases */
 			case '?':
@@ -2623,30 +2741,15 @@ int main(int argc, char **argv)
 				cfg_file, strerror(errno));
 		goto error;
 	}
-
-	/* seed the prng */
-	/* try to use /dev/urandom if possible */
-	seed = 0;
-	if((rfd = open("/dev/urandom", O_RDONLY)) != -1) {
-	try_again:
-		if(read(rfd, (void *)&seed, sizeof(seed)) == -1) {
-			if(errno == EINTR)
-				goto try_again; /* interrupted by signal */
-			LM_WARN("could not read from /dev/urandom (%d)\n", errno);
-		}
-		LM_DBG("read %u from /dev/urandom\n", seed);
-		close(rfd);
-	} else {
-		LM_WARN("could not open /dev/urandom (%d)\n", errno);
+	/* we need to do it early, as other user should get proper random numbers */
+	if(cryptorand_init() != 0) {
+		fprintf(stderr,
+				"ERROR: could not initalize secure random number generator\n");
+		goto error;
 	}
-	seed += getpid() + time(0);
-	LM_DBG("seeding PRNG with %u\n", seed);
-	cryptorand_seed(seed);
 	fastrand_seed(cryptorand());
 	kam_srand(cryptorand());
 	srandom(cryptorand());
-	LM_DBG("test random numbers %u %lu %u %u\n", kam_rand(), random(),
-			fastrand(), cryptorand());
 
 	/*register builtin  modules*/
 	register_builtin_modules();
@@ -2753,54 +2856,77 @@ int main(int argc, char **argv)
 					fprintf(stderr, "bad -l parameter\n");
 					goto error;
 				}
-				p = strrchr(optarg, '/');
-				if(p == NULL) {
-					p = optarg;
-				} else {
-					if(strlen(optarg) >= KSR_TBUF_SIZE - 1) {
-						fprintf(stderr, "listen value too long: %s\n", optarg);
-						goto error;
-					}
-					strcpy(tbuf, optarg);
-					p = strrchr(tbuf, '/');
-					if(p == NULL) {
-						fprintf(stderr, "unexpected bug for listen: %s\n",
-								optarg);
-						goto error;
-					}
-					*p = '\0';
-					p++;
-					tmp_len = 0;
-					if(parse_phostport(p, &ahost, &tmp_len, &aport, &aproto)
+				listen_field_count = 0;
+				/* split listen arguments */
+				tbuf = pkg_char_dup(optarg);
+				if(tbuf == NULL) {
+					fprintf(stderr, "error during processing -l parameter\n");
+				}
+				tbuf_tmp = tbuf;
+				while((p = strsep(&tbuf, "/")) != NULL
+						&& listen_field_count < 3) {
+					listen_fields[listen_field_count++] = p;
+				}
+				/* empty advertise only allowed with a name field */
+				if(listen_field_count == 2 && strlen(listen_fields[1]) <= 0) {
+					fprintf(stderr, "listen value with invalid advertise: %s\n",
+							optarg);
+					pkg_free(tbuf_tmp);
+					goto error;
+				}
+				ahost = NULL;
+				aport = 0;
+				aproto = PROTO_NONE;
+				if(listen_field_count > 1 && strlen(listen_fields[1]) > 0) {
+					/* advertise not empty */
+					if(parse_phostport(listen_fields[1], &ahost, &tmp_len,
+							   &aport, &aproto)
 							< 0) {
 						fprintf(stderr,
 								"listen value with invalid advertise: %s\n",
 								optarg);
+						pkg_free(tbuf_tmp);
 						goto error;
 					}
 					if(ahost) {
 						ahost[tmp_len] = '\0';
 					}
-					p = tbuf;
 				}
+				/* socket name */
+				if(listen_field_count == 3 && listen_fields[2] != NULL) {
+					if(strlen(listen_fields[2]) > 0) {
+						socket_name = listen_fields[2];
+					} else {
+						fprintf(stderr,
+								"listen value with invalid socket name: %s\n",
+								optarg);
+						pkg_free(tbuf_tmp);
+						goto error;
+					}
+				}
+				/* standard listen arguments */
 				if((n_lst = parse_phostport_mh(
-							p, &tmp, &tmp_len, &port, &proto))
+							listen_fields[0], &tmp, &tmp_len, &port, &proto))
 						== 0) {
 					fprintf(stderr,
 							"bad -l address specifier: %s\n"
 							"Check disabled protocols\n",
 							optarg);
+					pkg_free(tbuf_tmp);
 					goto error;
 				}
 				/* add a new addr. to our address list */
-				if(add_listen_advertise_iface(n_lst->name, n_lst->next, port,
-						   proto, aproto, ahost, aport, n_lst->flags)
+				if(add_listen_advertise_iface_name(n_lst->name, n_lst->next,
+						   port, proto, aproto, ahost, aport, socket_name,
+						   n_lst->flags)
 						!= 0) {
 					fprintf(stderr, "failed to add new listen address: %s\n",
 							optarg);
+					pkg_free(tbuf_tmp);
 					free_name_lst(n_lst);
 					goto error;
 				}
+				pkg_free(tbuf_tmp);
 				free_name_lst(n_lst);
 				break;
 			case 'n':
@@ -2927,21 +3053,13 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if(ksr_udp_receiver_mode != 1) {
+	if(ksr_udp_receiver_mode != 1 && ksr_udp_receiver_mode != 2) {
 		ksr_udp_receiver_mode = 0;
 	}
 
 	/* reinit if pv buffer size has been set in config */
 	if(pv_reinit_buffer() < 0)
 		goto error;
-
-	if(register_core_rpcs() != 0)
-		goto error;
-
-	if(ksr_route_locks_set_init() < 0)
-		goto error;
-
-	ksr_shutdown_phase_init();
 
 	/* init lookup for core event routes */
 	sr_core_ert_init();
@@ -2956,8 +3074,9 @@ int main(int argc, char **argv)
 		dont_fork = dont_fork == 1;
 	}
 	/* init locks first */
-	if(init_lock_ops() != 0)
+	if(init_lock_ops() != 0) {
 		goto error;
+	}
 #ifdef USE_TCP
 #ifdef USE_TLS
 	if(tcp_disable)
@@ -3072,12 +3191,12 @@ int main(int argc, char **argv)
 
 	if(dont_fork) {
 		fprintf(stderr, "WARNING: no fork mode %s\n",
-				(udp_listen) ? (
-						(udp_listen->next)
-								? "and more than one listen address found "
-								  "(will use only the first one)"
-								: "")
-							 : "and no udp listen address found");
+				(udp_listen)
+						? ((udp_listen->next) ? "and more than one listen "
+												"address found "
+												"(will use only the first one)"
+											  : "")
+						: "and no udp listen address found");
 	}
 	if(config_check) {
 		fprintf(stderr, "config file ok, exiting...\n");
@@ -3100,6 +3219,15 @@ int main(int argc, char **argv)
 		goto error;
 	pkg_print_manager();
 	shm_print_manager();
+
+	if(register_core_rpcs() != 0)
+		goto error;
+
+	if(ksr_route_locks_set_init() < 0)
+		goto error;
+
+	ksr_shutdown_phase_init();
+
 	if(init_atomic_ops() == -1)
 		goto error;
 	if(init_basex() != 0) {
@@ -3198,7 +3326,20 @@ int main(int argc, char **argv)
 			fprintf(stderr, "ERROR: error could not increase file limits\n");
 			goto error;
 		}
+	} else {
+		if(getrlimit(RLIMIT_NOFILE, &lim) < 0) {
+			LM_CRIT("cannot get the maximum number of file descriptors: %s\n",
+					strerror(errno));
+			goto error;
+		}
+		LM_INFO("current open file limits [soft/hard]: [%lu/%lu]\n",
+				(unsigned long)lim.rlim_cur, (unsigned long)lim.rlim_max);
 	}
+
+	LM_DBG("test random number generators - kam_rand: %u, random: %lu, "
+		   "fastrand %u, cryptorand %u\n",
+			kam_rand(), random(), fastrand(), cryptorand());
+
 	if(mlock_pages)
 		mem_lock_pages();
 
@@ -3222,6 +3363,9 @@ int main(int argc, char **argv)
 	}
 #endif /* USE_TLS */
 #endif /* USE_TCP */
+
+	async_tkv_init();
+	sr_core_ert_run_xname("core:modinit-before");
 
 	if(init_modules() != 0) {
 		fprintf(stderr, "ERROR: error while initializing modules\n");
@@ -3250,6 +3394,11 @@ int main(int argc, char **argv)
 #endif /* USE_TLS */
 #endif /* USE_TCP */
 
+	if(udp_main_init()) {
+		LM_CRIT("main UDP init failed\n");
+		goto error;
+	}
+
 	/* The total number of processes is now known, note that no
 	 * function being called before this point may rely on the
 	 * number of processes !
@@ -3269,6 +3418,16 @@ int main(int argc, char **argv)
 		goto error;
 	}
 #endif
+
+	if(ksr_tcp_main_threads != 0) {
+		if(ksr_tcpx_proc_list_init() < 0) {
+			LM_ERR("failed to initialize multi-thread processing list\n");
+			goto error;
+		}
+		LM_INFO("tcp main processing threads initialized\n");
+	} else {
+		LM_INFO("tcp main processing threads not enabled\n");
+	}
 
 	/* fix routing lists */
 	if((r = fix_rls()) != 0) {
@@ -3309,6 +3468,8 @@ error:
 /**
  * code to set PTHREAD_PROCESS_SHARED attribute for pthread mutex to cope
  * with libssl 1.1+ thread-only mutex initialization
+ *
+ * disabled when tcp_main_thread = 1 - MT-mode for OpenSSL/wolfSSL
  */
 
 #define SYMBOL_EXPORT __attribute__((visibility("default")))
@@ -3316,7 +3477,7 @@ error:
 int SYMBOL_EXPORT pthread_mutex_init(
 		pthread_mutex_t *__mutex, const pthread_mutexattr_t *__mutexattr)
 {
-	static int (*real_pthread_mutex_init)(pthread_mutex_t * __mutex,
+	static int (*real_pthread_mutex_init)(pthread_mutex_t *__mutex,
 			const pthread_mutexattr_t *__mutexattr) = 0;
 	pthread_mutexattr_t attr;
 	int ret;
@@ -3330,12 +3491,14 @@ int SYMBOL_EXPORT pthread_mutex_init(
 
 	if(__mutexattr) {
 		pthread_mutexattr_t attr = *__mutexattr;
-		pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+		if(ksr_tcp_main_threads == 0)
+			pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
 		return real_pthread_mutex_init(__mutex, &attr);
 	}
 
 	pthread_mutexattr_init(&attr);
-	pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+	if(ksr_tcp_main_threads == 0)
+		pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
 	ret = real_pthread_mutex_init(__mutex, &attr);
 	pthread_mutexattr_destroy(&attr);
 
@@ -3360,12 +3523,15 @@ int SYMBOL_EXPORT pthread_rwlock_init(pthread_rwlock_t *__restrict __rwlock,
 
 	if(__attr) {
 		pthread_rwlockattr_t attr = *__attr;
-		pthread_rwlockattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+
+		if(ksr_tcp_main_threads == 0)
+			pthread_rwlockattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
 		return real_pthread_rwlock_init(__rwlock, &attr);
 	}
 
 	pthread_rwlockattr_init(&attr);
-	pthread_rwlockattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+	if(ksr_tcp_main_threads == 0)
+		pthread_rwlockattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
 	ret = real_pthread_rwlock_init(__rwlock, &attr);
 	pthread_rwlockattr_destroy(&attr);
 

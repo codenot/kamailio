@@ -217,6 +217,67 @@ modparam("evapi", "wait_increase", 1)
 </programlisting>
 		</example>
 	</section>
+	<section id="evapi.p.send_task_timeout">
+		<title><varname>send_task_timeout</varname> (int)</title>
+		<para>
+			Set the timeout in microseconds to send the task internally to
+			evapi workers. If set to 0, no timeout is set.
+		</para>
+		<para>
+		<emphasis>
+			Default value is 0.
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>send_task_timeout</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("evapi", "send_task_timeout", 200000)
+...
+</programlisting>
+		</example>
+	</section>
+	<section id="evapi.p.send_data_timeout">
+		<title><varname>send_data_timeout</varname> (int)</title>
+		<para>
+			Set the timeout in microseconds to send the data to
+			evapi clients. If set to 0, no timeout is set.
+		</para>
+		<para>
+		<emphasis>
+			Default value is 0.
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>send_data_timeout</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("evapi", "send_data_timeout", 400000)
+...
+</programlisting>
+		</example>
+	</section>
+	<section id="evapi.p.context_mlimit">
+		<title><varname>context_mlimit</varname> (int)</title>
+		<para>
+			How many messages are allowed to be in the internal queue used to
+			propagate messages from config towards the dispatcher for evapi
+			clients.
+		</para>
+		<para>
+		<emphasis>
+			Default value is 0 (limit check disabled).
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>context_mlimit</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("evapi", "context_mlimit", 100)
+...
+</programlisting>
+		</example>
+	</section>
 	</section>
 
 	<section>
@@ -235,9 +296,12 @@ modparam("evapi", "wait_increase", 1)
 		</para>
 		<para>
 		The function is passing the task to evapi dispatcher process, therefore
-		the SIP worker process is not blocked. Also, it doesn't wait for any
-		response, therefore the processing of the configuration continues
-		very fast when executing evapi_relay().
+		the SIP worker process is not blocked executing the task. Also, it does
+		not wait for any response, therefore the processing of the configuration
+		usually continues very fast when executing evapi_relay(). Note that
+		passing the task is done internally via an inter-process communication
+		channel that is designed to be reliable and can block if the reading of
+		the tasks is slow.
 		</para>
 		<para>
 		This function can be used from ANY_ROUTE.
@@ -503,4 +567,3 @@ event_route[evapi:message-received] {
 	</section>
 
 </chapter>
-

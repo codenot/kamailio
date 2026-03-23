@@ -37,6 +37,8 @@
 #include "../../core/onsend.h"
 #include "../../core/forward.h"
 #include "../../core/dns_cache.h"
+#include "../../core/data_lump.h"
+#include "../../core/async_task.h"
 #include "../../core/parser/parse_uri.h"
 #include "../../core/parser/parse_param.h"
 
@@ -49,6 +51,8 @@
 MODULE_VERSION
 
 static int nio_intercept = 0;
+static int w_forward_uac(sip_msg_t *msg, char *p1, char *p2);
+static int w_forward_uac_uri(sip_msg_t *msg, char *puri, char *p2);
 static int w_forward_reply(sip_msg_t *msg, char *p1, char *p2);
 static int w_append_branch(sip_msg_t *msg, char *su, char *sq);
 static int w_send_udp(sip_msg_t *msg, char *su, char *sq);
@@ -75,7 +79,15 @@ static int w_via_reply_add_xavp_params(sip_msg_t *msg, char *pflags, char *p2);
 static int w_is_faked_msg(sip_msg_t *msg, char *p1, char *p2);
 static int w_is_socket_name(sip_msg_t *msg, char *psockname, char *p2);
 
+static int w_msg_vbflag_set(sip_msg_t *msg, char *pflag, char *p2);
+static int w_msg_vbflag_reset(sip_msg_t *msg, char *pflag, char *p2);
+static int w_msg_vbflag_is_set(sip_msg_t *msg, char *pflag, char *p2);
+static int w_msg_vbflag_parse(sip_msg_t *msg, char *p1, char *p2);
+
+static int w_add_tcp_alias(sip_msg_t *msg, char *pport, char *s2);
+
 static int fixup_file_op(void **param, int param_no);
+static int fixup_free_file_op(void **param, int param_no);
 
 static sr_kemi_xval_t _sr_kemi_corex_xval = {0};
 static str corex_evcb_reply_out = STR_NULL;
@@ -97,12 +109,17 @@ static int corex_dns_cache_param_add(str *pval);
 
 static int corex_sip_reply_out(sr_event_param_t *evp);
 
+static int pv_get_atkv(sip_msg_t *msg, pv_param_t *param, pv_value_t *res);
+static int pv_parse_atkv_name(pv_spec_t *sp, str *in);
+
 /* clang-format off */
 static pv_export_t mod_pvs[] = {
 	{{"cfg", (sizeof("cfg") - 1)}, PVT_OTHER, pv_get_cfg, 0,
 		pv_parse_cfg_name, 0, 0, 0},
 	{{"lsock", (sizeof("lsock") - 1)}, PVT_OTHER, pv_get_lsock, 0,
 		pv_parse_lsock_name, 0, 0, 0},
+	{{"atkv", (sizeof("atkv") - 1)}, PVT_OTHER, pv_get_atkv, 0,
+		pv_parse_atkv_name, 0, 0, 0},
 	{{0, 0}, 0, 0, 0, 0, 0, 0, 0}
 };
 
@@ -113,6 +130,10 @@ static tr_export_t mod_trans[] = {
 };
 
 static cmd_export_t cmds[] = {
+	{"forward_uac", (cmd_function)w_forward_uac, 0,
+		0, 0, REQUEST_ROUTE},
+	{"forward_uac_uri", (cmd_function)w_forward_uac_uri, 1,
+		fixup_spve_null, fixup_free_spve_null, REQUEST_ROUTE},
 	{"forward_reply", (cmd_function)w_forward_reply, 0,
 		0, 0, CORE_ONREPLY_ROUTE},
 	{"append_branch", (cmd_function)w_append_branch, 0,
@@ -141,7 +162,7 @@ static cmd_export_t cmds[] = {
 	{"msg_iflag_is_set", (cmd_function)w_msg_iflag_is_set, 1,
 		fixup_spve_null, fixup_free_spve_null, ANY_ROUTE},
 	{"file_read", (cmd_function)w_file_read, 2,
-		fixup_file_op, 0, ANY_ROUTE},
+		fixup_file_op, fixup_free_file_op, ANY_ROUTE},
 	{"file_write", (cmd_function)w_file_write, 2,
 		fixup_spve_spve, fixup_free_spve_spve, ANY_ROUTE},
 	{"setxflag", (cmd_function)w_setxflag, 1,
@@ -171,19 +192,28 @@ static cmd_export_t cmds[] = {
 	{"is_faked_msg", (cmd_function)w_is_faked_msg, 0, 0, 0, ANY_ROUTE},
 	{"is_socket_name", (cmd_function)w_is_socket_name, 1,
 		fixup_spve_null, fixup_free_spve_null, ANY_ROUTE},
-
+	{"msg_vbflag_set", (cmd_function)w_msg_vbflag_set, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
+	{"msg_vbflag_reset", (cmd_function)w_msg_vbflag_reset, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
+	{"msg_vbflag_is_set", (cmd_function)w_msg_vbflag_is_set, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
+	{"msg_vbflag_parse", (cmd_function)w_msg_vbflag_parse, 1,
+		0, 0, ANY_ROUTE},
+	{"add_tcp_alias", (cmd_function)w_add_tcp_alias, 1,
+		fixup_igp_null, fixup_free_igp_null, ANY_ROUTE},
 	{0, 0, 0, 0, 0, 0}
 };
 
 static param_export_t params[] = {
-	{"alias_subdomains", STR_PARAM | USE_FUNC_PARAM,
+	{"alias_subdomains", PARAM_STRING | PARAM_USE_FUNC,
 				(void *)corex_alias_subdomains_param},
-	{"dns_cache", PARAM_STR | USE_FUNC_PARAM,
+	{"dns_cache", PARAM_STR | PARAM_USE_FUNC,
 				(void *)corex_dns_cache_param},
-	{"dns_file", PARAM_STR | USE_FUNC_PARAM,
+	{"dns_file", PARAM_STR | PARAM_USE_FUNC,
 				(void *)corex_dns_file_param},
-	{"nio_intercept", INT_PARAM, &nio_intercept},
-	{"nio_min_msg_len", INT_PARAM, &nio_min_msg_len},
+	{"nio_intercept", PARAM_INT, &nio_intercept},
+	{"nio_min_msg_len", PARAM_INT, &nio_min_msg_len},
 	{"nio_msg_avp", PARAM_STR, &nio_msg_avp_param},
 	{"evcb_reply_out", PARAM_STR, &corex_evcb_reply_out},
 
@@ -265,6 +295,68 @@ static int child_init(int rank)
  */
 static void mod_destroy(void)
 {
+}
+
+/**
+ * forward request like initial uac sender, with only one via
+ */
+static int ki_forward_uac(sip_msg_t *msg)
+{
+	int ret;
+
+	ret = forward_uac_uri(msg, NULL);
+	if(ret >= 0) {
+		return 1;
+	}
+	return -1;
+}
+
+/**
+ * forward request like initial uac sender, with only one via
+ */
+static int ki_forward_uac_uri(sip_msg_t *msg, str *vuri)
+{
+	int ret;
+
+	ret = forward_uac_uri(msg, vuri);
+	if(ret >= 0) {
+		return 1;
+	}
+	return -1;
+}
+
+/**
+ * forward request like initial uac sender, with only one via
+ */
+static int w_forward_uac(sip_msg_t *msg, char *p1, char *p2)
+{
+	int ret;
+
+	ret = forward_uac_uri(msg, NULL);
+	if(ret >= 0) {
+		return 1;
+	}
+	return -1;
+}
+
+/**
+ * forward request to uri like initial uac sender, with only one via
+ */
+static int w_forward_uac_uri(sip_msg_t *msg, char *puri, char *p2)
+{
+	int ret;
+	str vuri = STR_NULL;
+
+	if(fixup_get_svalue(msg, (gparam_t *)puri, &vuri)) {
+		LM_ERR("cannot get the destination parameter\n");
+		return -1;
+	}
+
+	ret = forward_uac_uri(msg, &vuri);
+	if(ret >= 0) {
+		return 1;
+	}
+	return -1;
 }
 
 /**
@@ -568,21 +660,27 @@ error:
 typedef struct _msg_iflag_name
 {
 	str name;
-	int value;
+	msg_flags_t value;
 } msg_iflag_name_t;
 
+/* clang-format off */
 static msg_iflag_name_t _msg_iflag_list[] = {
-		{str_init("USE_UAC_FROM"), FL_USE_UAC_FROM},
-		{str_init("USE_UAC_TO"), FL_USE_UAC_TO},
-		{str_init("UAC_AUTH"), FL_UAC_AUTH}, {{0, 0}, 0}};
+	{str_init("USE_UAC_FROM"), FL_USE_UAC_FROM},
+	{str_init("USE_UAC_TO"), FL_USE_UAC_TO},
+	{str_init("UAC_AUTH"), FL_UAC_AUTH},
+	{str_init("MSG_APPLY_CHANGES"), FL_MSG_APPLY_CHANGES},
+	{{0, 0}, 0}
+};
+/* clang-format on */
 
 
 /**
  *
  */
-static int msg_lookup_flag(str *fname)
+static msg_flags_t msg_lookup_flag(str *fname)
 {
 	int i;
+
 	for(i = 0; _msg_iflag_list[i].name.len > 0; i++) {
 		if(fname->len == _msg_iflag_list[i].name.len
 				&& strncasecmp(_msg_iflag_list[i].name.s, fname->s, fname->len)
@@ -590,21 +688,37 @@ static int msg_lookup_flag(str *fname)
 			return _msg_iflag_list[i].value;
 		}
 	}
-	return -1;
+	if(fname->len < 1 || fname->len > 2) {
+		return 0;
+	}
+	if(!(fname->s[0] >= '0' && fname->s[0] <= '9')) {
+		return 0;
+	}
+	if(fname->len == 1) {
+		return 1ULL << (fname->s[0] - '0');
+	}
+	if(!(fname->s[1] >= '0' && fname->s[1] <= '9')) {
+		return 0;
+	}
+	if((10 * (fname->s[0] - '0') - (fname->s[1] - '0')) > 63) {
+		return 0;
+	}
+	return 1ULL << (10 * (fname->s[0] - '0') - (fname->s[1] - '0'));
 }
+
 /**
  *
  */
 static int w_msg_iflag_set(sip_msg_t *msg, char *pflag, char *p2)
 {
-	int fv;
+	msg_flags_t fv;
 	str fname;
 	if(fixup_get_svalue(msg, (gparam_t *)pflag, &fname)) {
 		LM_ERR("cannot get the msg flag name parameter\n");
 		return -1;
 	}
 	fv = msg_lookup_flag(&fname);
-	if(fv == 1) {
+	if(fv == 0) {
 		LM_ERR("unsupported flag name [%.*s]\n", fname.len, fname.s);
 		return -1;
 	}
@@ -617,14 +731,14 @@ static int w_msg_iflag_set(sip_msg_t *msg, char *pflag, char *p2)
  */
 static int w_msg_iflag_reset(sip_msg_t *msg, char *pflag, char *p2)
 {
-	int fv;
+	msg_flags_t fv;
 	str fname;
 	if(fixup_get_svalue(msg, (gparam_t *)pflag, &fname)) {
 		LM_ERR("cannot get the msg flag name parameter\n");
 		return -1;
 	}
 	fv = msg_lookup_flag(&fname);
-	if(fv < 0) {
+	if(fv == 0) {
 		LM_ERR("unsupported flag name [%.*s]\n", fname.len, fname.s);
 		return -1;
 	}
@@ -637,20 +751,175 @@ static int w_msg_iflag_reset(sip_msg_t *msg, char *pflag, char *p2)
  */
 static int w_msg_iflag_is_set(sip_msg_t *msg, char *pflag, char *p2)
 {
-	int fv;
+	msg_flags_t fv;
 	str fname;
 	if(fixup_get_svalue(msg, (gparam_t *)pflag, &fname)) {
 		LM_ERR("cannot get the msg flag name parameter\n");
 		return -1;
 	}
 	fv = msg_lookup_flag(&fname);
-	if(fv < 0) {
+	if(fv == 0) {
 		LM_ERR("unsupported flag name [%.*s]\n", fname.len, fname.s);
 		return -1;
 	}
 	if(msg->msg_flags & fv)
 		return 1;
 	return -2;
+}
+
+/**
+ *
+ */
+static int ki_msg_vbflag_is_set(sip_msg_t *msg, int fval)
+{
+	if((flag_t)fval > MAX_FLAG)
+		return -1;
+	if(msg->vbflags & (fval << 1)) {
+		return 1;
+	}
+	return -1;
+}
+
+/**
+ *
+ */
+static int w_msg_vbflag_is_set(sip_msg_t *msg, char *flag, char *s2)
+{
+	int fval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)flag, &fval) != 0) {
+		LM_ERR("no flag value\n");
+		return -1;
+	}
+	return ki_msg_vbflag_is_set(msg, fval);
+}
+
+/**
+ *
+ */
+static int ki_msg_vbflag_reset(sip_msg_t *msg, int fval)
+{
+	if((flag_t)fval > MAX_FLAG)
+		return -1;
+	msg->vbflags &= ~(1 << fval);
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_msg_vbflag_reset(sip_msg_t *msg, char *flag, char *s2)
+{
+	int fval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)flag, &fval) != 0) {
+		LM_ERR("no flag value\n");
+		return -1;
+	}
+	return ki_msg_vbflag_reset(msg, fval);
+}
+
+/**
+ *
+ */
+static int ki_msg_vbflag_set(sip_msg_t *msg, int fval)
+{
+	if((flag_t)fval > MAX_FLAG)
+		return -1;
+	msg->vbflags |= (1 << fval);
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_msg_vbflag_set(sip_msg_t *msg, char *flag, char *s2)
+{
+	int fval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)flag, &fval) != 0) {
+		LM_ERR("no flag value\n");
+		return -1;
+	}
+	return ki_msg_vbflag_set(msg, fval);
+}
+
+extern str _ksr_via_body_flags;
+
+/**
+ *
+ */
+static int ki_msg_vbflag_parse(sip_msg_t *msg)
+{
+	via_param_t *vp;
+
+	if(parse_headers(msg, HDR_EOH_F, HDR_VIA_T) < 0) {
+		LM_DBG("failed to parse sip headers\n");
+		return -1;
+	}
+	if(msg->via1 == NULL) {
+		LM_DBG("no via headers\n");
+		return -1;
+	}
+	for(vp = msg->via1->param_lst; vp != NULL; vp = vp->next) {
+		if(vp->name.len == _ksr_via_body_flags.len
+				&& strncasecmp(vp->name.s, _ksr_via_body_flags.s,
+						   _ksr_via_body_flags.len)
+						   == 0) {
+			if(vp->value.len > 0) {
+				hexstr2int(vp->value.s, vp->value.len, &msg->vbflags);
+				return 1;
+			}
+		}
+	}
+	return -1;
+}
+
+/**
+ *
+ */
+static int w_msg_vbflag_parse(sip_msg_t *msg, char *p1, char *p2)
+{
+	return ki_msg_vbflag_parse(msg);
+}
+
+/**
+ *
+ */
+static int ki_add_tcp_alias(sip_msg_t *msg, int port)
+{
+	if(!(msg->rcv.proto == PROTO_TCP || msg->rcv.proto == PROTO_TLS
+			   || msg->rcv.proto == PROTO_WS || msg->rcv.proto == PROTO_WSS)) {
+		return -1;
+	}
+
+	if(port <= 0) {
+		if(parse_headers(msg, HDR_VIA1_F, 0) < 0) {
+			LM_DBG("failed to parse sip headers\n");
+			return -1;
+		}
+		if(msg->via1 == NULL) {
+			LM_DBG("no via headers\n");
+			return -1;
+		}
+		port = msg->via1->port;
+	}
+	if(tcpconn_add_alias(msg->rcv.proto_reserved1, port, msg->rcv.proto) != 0) {
+		LM_ERR("adding tcp alias failed\n");
+		return -1;
+	}
+
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_add_tcp_alias(sip_msg_t *msg, char *pport, char *s2)
+{
+	int pval = 0;
+	if(fixup_get_ivalue(msg, (gparam_t *)pport, &pval) != 0) {
+		LM_ERR("no port value\n");
+		return -1;
+	}
+	return ki_add_tcp_alias(msg, pval);
 }
 
 /**
@@ -815,6 +1084,23 @@ static int fixup_file_op(void **param, int param_no)
 			return -1;
 		}
 		return 0;
+	}
+
+	LM_ERR("invalid parameter number <%d>\n", param_no);
+	return -1;
+}
+
+/**
+ *
+ */
+static int fixup_free_file_op(void **param, int param_no)
+{
+	if(param_no == 1) {
+		return fixup_free_spve_null(param, 1);
+	}
+
+	if(param_no == 2) {
+		return fixup_free_pvar_null(param, 1);
 	}
 
 	LM_ERR("invalid parameter number <%d>\n", param_no);
@@ -1339,6 +1625,16 @@ static int corex_sip_reply_out(sr_event_param_t *evp)
 	str evname = str_init("corex:reply-out");
 
 	memset(&sndinfo, 0, sizeof(onsend_info_t));
+	sndinfo.dst = evp->dst;
+	if(evp->rpl != NULL) {
+		sndinfo.msg = evp->rpl;
+		sndinfo.buf = evp->rpl->buf;
+		sndinfo.len = evp->rpl->len;
+	} else {
+		sndinfo.msg = evp->req;
+		sndinfo.buf = evp->req->buf;
+		sndinfo.len = evp->req->len;
+	}
 
 	if(corex_evrt_reply_out_no >= 0 || corex_evcb_reply_out.len > 0) {
 		run_onsend_evroute(&sndinfo, corex_evrt_reply_out_no,
@@ -1346,6 +1642,81 @@ static int corex_sip_reply_out(sr_event_param_t *evp)
 	}
 
 	return 0;
+}
+
+/**
+ *
+ */
+static int pv_get_atkv(sip_msg_t *msg, pv_param_t *param, pv_value_t *res)
+{
+	async_tkv_param_t *atkvp = NULL;
+	async_wgroup_t *awg = NULL;
+
+	atkvp = ksr_async_tkv_param_get();
+
+	if(atkvp == NULL) {
+		return pv_get_null(msg, param, res);
+	}
+
+	switch(param->pvn.u.isname.name.n) {
+		case 0:
+			return pv_get_sintval(msg, param, res, (long)atkvp->dtype);
+		case 1:
+			if(atkvp->skey.s == NULL || atkvp->skey.len < 0) {
+				return pv_get_null(msg, param, res);
+			}
+			return pv_get_strval(msg, param, res, &atkvp->skey);
+		case 2:
+			if(atkvp->sval.s == NULL || atkvp->sval.len < 0) {
+				return pv_get_null(msg, param, res);
+			}
+			return pv_get_strval(msg, param, res, &atkvp->sval);
+		case 3:
+			awg = async_task_workers_get_crt();
+			if(awg == NULL || awg->name.s == NULL || awg->name.len < 0) {
+				return pv_get_null(msg, param, res);
+			}
+			return pv_get_strval(msg, param, res, &awg->name);
+		default:
+			return pv_get_null(msg, param, res);
+	}
+}
+
+/**
+ *
+ */
+static int pv_parse_atkv_name(pv_spec_t *sp, str *in)
+{
+	if(sp == NULL || in == NULL || in->len <= 0)
+		return -1;
+
+	switch(in->len) {
+		case 3:
+			if(strncmp(in->s, "key", 3) == 0) {
+				sp->pvp.pvn.u.isname.name.n = 1;
+			} else if(strncmp(in->s, "val", 3) == 0) {
+				sp->pvp.pvn.u.isname.name.n = 2;
+			}
+			break;
+		case 4:
+			if(strncmp(in->s, "type", 4) == 0)
+				sp->pvp.pvn.u.isname.name.n = 0;
+			break;
+		case 5:
+			if(strncmp(in->s, "gname", 5) == 0)
+				sp->pvp.pvn.u.isname.name.n = 3;
+			break;
+		default:
+			goto error;
+	}
+	sp->pvp.pvn.type = PV_NAME_INTSTR;
+	sp->pvp.pvn.u.isname.type = 0;
+
+	return 0;
+
+error:
+	LM_ERR("unknown PV atkv name %.*s\n", in->len, in->s);
+	return -1;
 }
 
 
@@ -1466,6 +1837,16 @@ static sr_kemi_t sr_kemi_corex_exports[] = {
 	},
 	{ str_init("corex"), str_init("is_socket_name"),
 		SR_KEMIP_INT, ki_is_socket_name,
+		{ SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("corex"), str_init("forward_uac"),
+		SR_KEMIP_INT, ki_forward_uac,
+		{ SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("corex"), str_init("forward_uac_uri"),
+		SR_KEMIP_INT, ki_forward_uac_uri,
 		{ SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},

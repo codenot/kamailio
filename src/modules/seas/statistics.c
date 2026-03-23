@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -283,6 +285,7 @@ int start_stats_server(char *stats_socket)
 		goto error;
 	}
 	if(!(pid = fork())) { /*child*/
+		_ksr_is_main = 0;
 		signal(SIGTERM, sig_handler);
 		serve_stats(stats_fd);
 		printf("statistics Server Process exits !!\n");

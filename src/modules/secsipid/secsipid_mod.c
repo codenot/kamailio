@@ -121,7 +121,7 @@ static param_export_t params[]={
 	{"cache_expire",  PARAM_INT,   &secsipid_cache_expire},
 	{"cache_dir",     PARAM_STR,   &secsipid_cache_dir},
 	{"modproc",       PARAM_STR,   &secsipid_modproc},
-	{"libopt",        PARAM_STR|USE_FUNC_PARAM,
+	{"libopt",        PARAM_STR|PARAM_USE_FUNC,
 		(void*)secsipid_libopt_param},
 
 	{0, 0, 0}
@@ -916,6 +916,7 @@ static sr_kemi_xval_t *ki_secsipid_get_url(sip_msg_t *msg, str *surl)
 
 	if(_secsipid_get_url_val.s != NULL) {
 		free(_secsipid_get_url_val.s);
+		_secsipid_get_url_val.s = NULL;
 		_secsipid_get_url_val.len = 0;
 	}
 
@@ -959,6 +960,7 @@ static int w_secsipid_get_url(sip_msg_t *msg, char *purl, char *povar)
 	}
 	if(_secsipid_get_url_val.s != NULL) {
 		free(_secsipid_get_url_val.s);
+		_secsipid_get_url_val.s = NULL;
 		_secsipid_get_url_val.len = 0;
 	}
 

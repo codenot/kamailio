@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -84,17 +86,24 @@ enum lump_conditions
 
 enum lump_flag
 {
-	LUMPFLAG_NONE = 0,	   /* */
-	LUMPFLAG_DUPED = 1,	   /* lump struct duplicated in pkg, with value
+	LUMPFLAG_NONE = 0,		/* */
+	LUMPFLAG_DUPED = 1,		/* lump struct duplicated in pkg, with value
 									* pointing to initial lump structure
 									* - e.g., used for branch_route execution */
-	LUMPFLAG_SHMEM = 2,	   /* lump stored in shared memory (e.g., tm) */
-	LUMPFLAG_BRANCH = 4,   /* not in use ?!? */
-	LUMPFLAG_COND_TRUE = 8 /* conditional lump processing */
+	LUMPFLAG_SHMEM = 2,		/* lump stored in shared memory (e.g., tm) */
+	LUMPFLAG_BRANCH = 4,	/* not in use ?!? */
+	LUMPFLAG_COND_TRUE = 8, /* conditional lump processing */
+	LUMPFLAG_APPLIED = 16,	/* lump already applied */
+	LUMPFLAG_RR = 32		/* lump related to record-route */
 };
 
 #define LUMP_SET_COND_TRUE(_lump) (_lump)->flags |= LUMPFLAG_COND_TRUE
 #define LUMP_IS_COND_TRUE(_lump) ((_lump)->flags & LUMPFLAG_COND_TRUE)
+
+#define LUMP_SET_FLAG(_lump, _flag) \
+	do {                            \
+		(_lump)->flags |= _flag;    \
+	} while(0)
 
 typedef struct lump
 {

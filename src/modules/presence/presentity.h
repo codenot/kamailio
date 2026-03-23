@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -55,7 +57,7 @@ presentity_t *new_presentity(str *domain, str *user, int expires,
 /* update presentity in database */
 int update_presentity(struct sip_msg *msg, presentity_t *p, str *body,
 		int t_new, int *sent_reply, char *sphere, str *etag_override, str *ruid,
-		int replace);
+		int replace, int skip_notify);
 
 /* update presentity in database using API */
 int _api_update_presentity(str *event, str *realm, str *user, str *etag,

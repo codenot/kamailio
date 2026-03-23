@@ -29,6 +29,7 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/time.h>
 #include <fcntl.h>
 
 #include <ev.h>
@@ -53,6 +54,17 @@ extern int _evapi_dispatcher_pid;
 extern int _evapi_max_clients;
 extern int _evapi_wait_idle;
 extern int _evapi_wait_increase;
+extern int _evapi_send_task_timeout;
+extern int _evapi_send_data_timeout;
+
+typedef struct _evapi_context_t
+{
+	gen_lock_t alock;
+	unsigned int mcount;
+	unsigned int mlimit;
+} evapi_context_t;
+
+static evapi_context_t *_evapi_context = NULL;
 
 #define EVAPI_IPADDR_SIZE 64
 #define EVAPI_TAG_SIZE 64
@@ -64,7 +76,7 @@ typedef struct _evapi_client
 	unsigned short af;
 	unsigned short src_port;
 	char src_addr[EVAPI_IPADDR_SIZE];
-	char tag[EVAPI_IPADDR_SIZE];
+	char tag[EVAPI_TAG_SIZE];
 	str stag;
 	char rbuffer[CLIENT_BUFFER_SIZE];
 	unsigned int rpos;
@@ -110,6 +122,76 @@ typedef struct _evapi_evroutes
 static evapi_evroutes_t _evapi_rts;
 
 static evapi_queue_t *_evapi_queue_packets = NULL;
+
+/**
+ *
+ */
+int evapi_context_init(unsigned int vlimit)
+{
+	_evapi_context = (evapi_context_t *)shm_malloc(sizeof(evapi_context_t));
+	if(_evapi_context == NULL) {
+		return -1;
+	}
+	memset(_evapi_context, 0, sizeof(evapi_context_t));
+	if(lock_init(&_evapi_context->alock) == NULL) {
+		shm_free(_evapi_context);
+		_evapi_context = NULL;
+		return -1;
+	}
+	_evapi_context->mlimit = vlimit;
+	return 0;
+}
+
+/**
+ *
+ */
+int evapi_context_mcount_inc(int mode)
+{
+	if(_evapi_context == NULL) {
+		return -1;
+	}
+	lock_get(&_evapi_context->alock);
+	if(_evapi_context->mlimit > 0) {
+		if(_evapi_context->mcount >= _evapi_context->mlimit) {
+			lock_release(&_evapi_context->alock);
+			return -1;
+		}
+	}
+	_evapi_context->mcount++;
+
+	if(mode == 0) {
+		lock_release(&_evapi_context->alock);
+	}
+	return 0;
+}
+
+/**
+ *
+ */
+int evapi_context_mcount_dec(void)
+{
+	if(_evapi_context == NULL) {
+		return -1;
+	}
+	lock_get(&_evapi_context->alock);
+	if(_evapi_context->mcount > 0) {
+		_evapi_context->mcount--;
+	}
+	lock_release(&_evapi_context->alock);
+	return 0;
+}
+
+/**
+ *
+ */
+int evapi_context_release(void)
+{
+	if(_evapi_context == NULL) {
+		return -1;
+	}
+	lock_release(&_evapi_context->alock);
+	return 0;
+}
 
 /**
  *
@@ -411,11 +493,16 @@ int evapi_dispatch_notify(evapi_msg_t *emsg)
 	int i;
 	int n;
 	int wlen;
+	struct timeval tv;
 
 	if(_evapi_clients == NULL) {
 		return 0;
 	}
 
+	if(_evapi_send_data_timeout > 0) {
+		tv.tv_sec = _evapi_send_data_timeout / 1000000;
+		tv.tv_usec = _evapi_send_data_timeout % 1000000;
+	}
 	n = 0;
 	for(i = 0; i < EVAPI_MAX_CLIENTS; i++) {
 		if(_evapi_clients[i].connected == 1 && _evapi_clients[i].sock >= 0) {
@@ -424,6 +511,10 @@ int evapi_dispatch_notify(evapi_msg_t *emsg)
 							&& strncmp(_evapi_clients[i].stag.s, emsg->tag.s,
 									   emsg->tag.len)
 									   == 0)) {
+				if(_evapi_send_data_timeout > 0) {
+					setsockopt(_evapi_clients[i].sock, SOL_SOCKET, SO_SNDTIMEO,
+							&tv, sizeof(struct timeval));
+				}
 				wlen = write(
 						_evapi_clients[i].sock, emsg->data.s, emsg->data.len);
 				if(wlen != emsg->data.len) {
@@ -747,9 +838,14 @@ void evapi_recv_notify(struct ev_loop *loop, struct ev_io *watcher, int revents)
 
 	cfg_update();
 
-	/* read message from client */
+	if(watcher->fd != _evapi_notify_sockets[0]) {
+		LM_INFO("unexpected socket descriptors: [%d / %d]\n", watcher->fd,
+				_evapi_notify_sockets[0]);
+	}
+	/* read message to dispatch */
 	rlen = read(watcher->fd, &emsg, sizeof(evapi_msg_t *));
 
+	evapi_context_mcount_dec();
 	if(rlen != sizeof(evapi_msg_t *) || emsg == NULL) {
 		LM_ERR("cannot read the sip worker message\n");
 		return;
@@ -902,6 +998,7 @@ int _evapi_relay(str *evdata, str *ctag, int unicast)
 	int len;
 	int sbsize;
 	evapi_msg_t *emsg;
+	struct timeval tv;
 
 	LM_DBG("relaying event data [%.*s] (%d)\n", evdata->len, evdata->s,
 			evdata->len);
@@ -943,12 +1040,25 @@ int _evapi_relay(str *evdata, str *ctag, int unicast)
 	LM_DBG("sending [%p] [%.*s] (%d)\n", (void *)emsg, emsg->data.len,
 			emsg->data.s, emsg->data.len);
 	if(_evapi_notify_sockets[1] != -1) {
+		if(_evapi_send_task_timeout > 0) {
+			tv.tv_sec = _evapi_send_task_timeout / 1000000;
+			tv.tv_usec = _evapi_send_task_timeout % 1000000;
+		}
+		if(evapi_context_mcount_inc(1) < 0) {
+			shm_free(emsg);
+			LM_ERR("evapi context condition failure - dropping message\n");
+			return -1;
+		}
+		setsockopt(_evapi_notify_sockets[1], SOL_SOCKET, SO_SNDTIMEO, &tv,
+				sizeof(struct timeval));
 		len = write(_evapi_notify_sockets[1], &emsg, sizeof(evapi_msg_t *));
 		if(len <= 0) {
+			evapi_context_release();
 			shm_free(emsg);
 			LM_ERR("failed to pass the pointer to evapi dispatcher\n");
 			return -1;
 		}
+		evapi_context_release();
 	} else {
 		cfg_update();
 		LM_DBG("dispatching [%p] [%.*s] (%d)\n", (void *)emsg, emsg->data.len,

@@ -4,7 +4,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -14,7 +14,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -24,6 +24,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -99,52 +101,54 @@ int match_contact_host_port =
 db1_con_t *ul_dbh = 0;
 db_func_t ul_dbf;
 
+/* clang-format off */
 /*! \brief
  * Exported functions
  */
 static cmd_export_t cmds[] = {
-		{"ul_bind_ims_usrloc_pcscf", (cmd_function)bind_usrloc, 1, 0, 0, 0},
-		{0, 0, 0, 0, 0, 0}};
+	{"ul_bind_ims_usrloc_pcscf", (cmd_function)bind_usrloc, 1, 0, 0, 0},
+	{0, 0, 0, 0, 0, 0}
+};
 
 /*! \brief
  * Exported parameters
  */
-static param_export_t params[] = {{"hash_size", INT_PARAM, &ul_hash_size},
-		{"timer_interval", INT_PARAM, &timer_interval},
-		{"usrloc_debug_file", PARAM_STR, &usrloc_debug_file},
-		{"enable_debug_file", INT_PARAM, &usrloc_debug},
-
-		{"db_url", PARAM_STR, &db_url},
-		{"timer_interval", INT_PARAM, &timer_interval},
-		{"db_mode", INT_PARAM, &db_mode},
-
-		{"match_contact_host_port", INT_PARAM, &match_contact_host_port},
-		{"audit_expired_pcontacts_timeout", INT_PARAM,
-				&audit_expired_pcontacts_timeout},
-		{"audit_expired_pcontacts_interval", INT_PARAM,
-				&audit_expired_pcontacts_interval},
-		{"expires_grace", INT_PARAM, &expires_grace},
-
-		{0, 0, 0}};
-
-stat_export_t mod_stats[] = {{"registered_contacts", STAT_IS_FUNC,
-									 (stat_var **)get_number_of_contacts},
-		{"registered_impus", STAT_IS_FUNC, (stat_var **)get_number_of_impu},
-		{"expired_contacts", STAT_IS_FUNC, (stat_var **)get_number_of_expired},
-		{0, 0, 0}};
-
-struct module_exports exports = {
-		"ims_usrloc_pcscf", DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,								 /* exported functions */
-		params,								 /* export parameters */
-		0,									 /* exported RPC functions */
-		0,									 /* exported pseudo-variables */
-		0,									 /* response·function */
-		mod_init,	/* module initialization function */
-		child_init, /* per-child·init·function*/
-		destroy		/* destroy function */
+static param_export_t params[] = {
+	{"hash_size", PARAM_INT, &ul_hash_size},
+	{"timer_interval", PARAM_INT, &timer_interval},
+	{"usrloc_debug_file", PARAM_STR, &usrloc_debug_file},
+	{"enable_debug_file", PARAM_INT, &usrloc_debug},
+	{"db_url", PARAM_STR, &db_url},
+	{"timer_interval", PARAM_INT, &timer_interval},
+	{"db_mode", PARAM_INT, &db_mode},
+	{"match_contact_host_port", PARAM_INT, &match_contact_host_port},
+	{"audit_expired_pcontacts_timeout", PARAM_INT,
+		&audit_expired_pcontacts_timeout},
+	{"audit_expired_pcontacts_interval", PARAM_INT,
+		&audit_expired_pcontacts_interval},
+	{"expires_grace", PARAM_INT, &expires_grace},
+	{0, 0, 0}
 };
 
+stat_export_t mod_stats[] = {
+	{"registered_contacts", STAT_IS_FUNC, (stat_var **)get_number_of_contacts},
+	{"registered_impus", STAT_IS_FUNC, (stat_var **)get_number_of_impu},
+	{"expired_contacts", STAT_IS_FUNC, (stat_var **)get_number_of_expired},
+	{0, 0, 0}
+};
+
+struct module_exports exports = {
+	"ims_usrloc_pcscf", DEFAULT_DLFLAGS, /* dlopen flags */
+	cmds,								 /* exported functions */
+	params,								 /* export parameters */
+	0,									 /* exported RPC functions */
+	0,									 /* exported pseudo-variables */
+	0,									 /* response·function */
+	mod_init,	/* module initialization function */
+	child_init, /* per-child·init·function*/
+	destroy		/* destroy function */
+};
+/* clang-format on */
 
 /*! \brief
  * Module initialization function

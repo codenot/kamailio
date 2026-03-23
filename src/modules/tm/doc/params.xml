@@ -18,8 +18,12 @@
     <section id="tm.p.fr_timer">
 	<title><varname>fr_timer</varname> (integer)</title>
 	<para>
-	    Timer which hits if no final reply for a request or ACK for a
-	    negative INVITE reply arrives (in milliseconds).
+		This timer is used for all SIP requests. It hits if no reply for an
+		request INVITE request or other request has been received
+		within (F in milliseconds). If a provisional reply is received for an
+		INVITE (any 1xx), then the fr_inv_timer will be used instead. And if
+		no replies (at all) for an INVITE are received before fr_timer hits,
+		the transaction is terminated with a 408 in failure route.
 	</para>
 	<para>
 	    Default value is 30000 ms (30 seconds).
@@ -825,19 +829,19 @@ modparam("tm", "contact_flows_avp", "tm_contact_flows")
 			<varname>fr_timer</varname>.
 		</para>
 		<para>
-			In Kamailio compatibility mode (defined by #!KAMAILIO), the value
-			of the parameter must be the name of an AVP in pseudo-variable
-			format: $avp(name). In SER compatibility mode it must be just
-			AVP name.
+			In Kamailio compatibility mode (defined by #!KAMAILIO, which is
+			default), the value of the parameter must be the name of an AVP
+			in pseudo-variable format: $avp(name). In SER compatibility mode
+			(defined by #!SER) it must be just AVP name.
 		</para>
 		<example>
 			<title>Set <varname>fr_timer_avp</varname> parameter</title>
 			<programlisting>
 ...
-# Kamailio mode
-modparam("tm", "fr_timer_avp", "$avp(i:708)")
-# Old SER mode
-modparam("tm", "fr_timer_avp", "i:708")
+# default Kamailio compatibility mode
+modparam("tm", "fr_timer_avp", "$avp(frtimer)")
+# old SER compatibility mode
+modparam("tm", "fr_timer_avp", "frtimer")
 ...
 			</programlisting>
 		</example>
@@ -871,18 +875,18 @@ modparam("tm", "fr_timer_avp", "i:708")
 			<varname>fr_inv_timer</varname>.
 		</para>
 		<para>
-			In Kamailio compatibility mode (defined by #!KAMAILIO), the value
-			of the parameter must be the name of an AVP in pseudo-variable
-			format: $avp(name). In SER compatibility mode it must by just
-			AVP name.
+			In Kamailio compatibility mode (defined by #!KAMAILIO, which is
+			default), the value of the parameter must be the name of an AVP
+			in pseudo-variable format: $avp(name). In SER compatibility mode
+			(defined by #!SER) it must by just AVP name.
 		</para>
 		<example>
 			<title>Set <varname>fr_inv_timer_avp</varname> parameter</title>
 			<programlisting>
 ...
-# Kamailio mode
+# Kamailio compatibility mode
 modparam("tm", "fr_inv_timer_avp", "$avp(my_fr_inv_timer)")
-# Old SER mode
+# old SER compatibility mode
 modparam("tm", "fr_inv_timer_avp", "my_fr_inv_timer")
 ...
 			</programlisting>
@@ -1033,7 +1037,7 @@ modparam("tm", "callid_matching", 1)
 modparam("tm", "callid_cseq_matching", 0)
 ...
 
-kamcmd cfg.set_now_int tm callid_cseq_matching 1
+kamctl rpc cfg.set_now_int tm callid_cseq_matching 1
 		</programlisting>
 		</example>
 	</section>
@@ -1200,6 +1204,26 @@ modparam("tm", "local_ack_mode", 1)
 	</example>
 	</section>
 
+	<section id="tm.p.local_ack_branch_mode">
+	<title><varname>local_ack_branch_mode</varname> (integer)</title>
+	<para>
+		If set to 1, the Via branch value of the ACK for 200ok of a local INVITE
+		has a slightly different value than the corresponding local INVITE. If
+		set to 2, a new Via branch is attempted to be created.
+	</para>
+	<para>
+		Default 0.
+	</para>
+	<example>
+		<title>Set <varname>local_ack_branch_mode</varname> parameter</title>
+		<programlisting>
+...
+modparam("tm", "local_ack_branch_mode", 1)
+...
+	    </programlisting>
+	</example>
+	</section>
+
 	<section id="tm.p.failure_reply_mode">
 	<title><varname>failure_reply_mode</varname> (integer)</title>
 	<para>
@@ -1351,6 +1375,47 @@ modparam("tm", "local_cancel_reason", 0)
 			<programlisting>
 ...
 modparam("tm", "e2e_cancel_reason", 0)
+...
+			</programlisting>
+		</example>
+	</section>
+
+	<section id="e2e_cancel_hop_by_hop">
+		<title><varname>e2e_cancel_hop_by_hop</varname> (int)</title>
+		<para>
+			Enable/disable sending CANCEL in hop-by-hop mode.
+		</para>
+		<para>
+			Default value: 1 (hop-by-hop mode).
+		</para>
+		<example>
+			<title>Set <varname>e2e_cancel_hop_by_hop</varname> parameter</title>
+			<programlisting>
+...
+modparam("tm", "e2e_cancel_hop_by_hop", 0)
+...
+			</programlisting>
+		</example>
+	</section>
+
+	<section id="headers_mode">
+		<title><varname>headers_mode</varname> (int)</title>
+		<para>
+			Control how headers from incoming CANCEL should be propagated to
+			hop-by-hop generated CANCEL. If bit (flag) 1 is set (value 1),
+			propagate the headers that are not branch specific (e.g., From, To).
+			If bit (flag) 2 is set, in case processing ends in stateless
+			forwarding by tm, forward CANCEL with a single Via header (the one
+			added by &kamailio;).
+		</para>
+		<para>
+			Default value: 0 (do not propagate).
+		</para>
+		<example>
+			<title>Set <varname>headers_mode</varname> parameter</title>
+			<programlisting>
+...
+modparam("tm", "headers_mode", 1)
 ...
 			</programlisting>
 		</example>
@@ -1510,6 +1575,36 @@ end
 		</example>
 	</section>
 
+	<section id="tm.p.evcb_local_ack_sent">
+		<title><varname>evcb_local_ack_sent</varname> (str)</title>
+		<para>
+			The name of the function in the kemi configuration file (embedded
+			scripting language such as Lua, Python, ...) to be executed instead
+			of event_route[tm:local-ack-sent] block. The function receives
+			a string parameter with the name of the event, respectively
+			"tm:local-ack-sent".
+		</para>
+		<para>
+		<emphasis>
+			Default value is 'empty' (no function is executed for events).
+		</emphasis>
+		</para>
+		<example>
+		<title>Set <varname>evcb_local_ack_sent</varname> parameter</title>
+		<programlisting format="linespecific">
+...
+modparam("tm", "evcb_local_ack_sent", "ksr_tm_event_local_ack_sent")
+...
+-- event callback function implemented in Lua
+function ksr_tm_event_local_ack_sent(evname)
+	KSR.info("===== tm module triggered event: " .. evname .. "\n");
+	return 1;
+end
+...
+</programlisting>
+		</example>
+	</section>
+
 	<section id="tm.p.relay_100">
 		<title><varname>relay_100</varname> (str)</title>
 		<para>
@@ -1660,6 +1755,84 @@ modparam("tm", "enable_uac_fr", 1)
 modparam("tm", "failover_reply_codes", "code=403;code=488;class=5")
 ...
 </programlisting>
+		</example>
+	</section>
+
+	<section id="tm.p.reply_408_code">
+		<title><varname>reply_408_code</varname> (int)</title>
+		<para>
+			Status code for internally generated timeout responses.
+		</para>
+		<emphasis>
+			Default value is <quote>408</quote>.
+		</emphasis>
+		<example>
+			<title>reply_408_code example</title>
+			<programlisting>
+...
+modparam("tm", "reply_408_code", 410)
+....
+			</programlisting>
+		</example>
+	</section>
+
+	<section id="tm.p.reply_408_reason">
+		<title><varname>reply_408_reason</varname> (str)</title>
+		<para>
+			Reason phrase for internally generated timeout responses.
+		</para>
+		<emphasis>
+			Default value is <quote>Request Timeout</quote>.
+		</emphasis>
+		<example>
+			<title>reply_408_reason example</title>
+			<programlisting>
+...
+modparam("tm", "reply_408_reason", "Gone")
+....
+			</programlisting>
+		</example>
+	</section>
+
+	<section id="tm.p.rdelayed_reply">
+		<title><varname>delayed_reply</varname> (int)</title>
+		<para>
+			If set to 1, the reply generation in case of request
+			processing/forwarding error is delayed till the config script
+			execution ends. This allows the script writer to send its
+			own error reply. If set to 0, the transaction is replied and killed
+			immediately.
+		</para>
+		<emphasis>
+			Default value is <quote>1</quote>.
+		</emphasis>
+		<example>
+			<title>delayed_reply example</title>
+			<programlisting>
+...
+modparam("tm", "delayed_reply", 0)
+....
+			</programlisting>
+		</example>
+	</section>
+
+	<section id="tm.p.evlreq_mode">
+		<title><varname>evlreq_mode</varname> (int)</title>
+		<para>
+			If bit 1 is set (value 1), the event_route[tm:local-request] is also
+			executed for hop-by-hop CANCEL requests (for received INVITEs,
+			not only for local generated ones).
+		</para>
+		<emphasis>
+			Default value is <quote>0</quote>.
+		</emphasis>
+		<example>
+			<title>evlreq_mode example</title>
+			<programlisting>
+...
+modparam("tm", "evlreq_mode", 1)
+....
+			</programlisting>
 		</example>
 	</section>
 

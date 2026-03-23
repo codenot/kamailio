@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -62,6 +64,9 @@ inline static struct lump_rpl *add_lump_rpl(
 
 
 void free_lump_rpl(struct lump_rpl *);
+void free_reply_lump_list(struct lump_rpl *lump);
+
+struct lump_rpl *copy_reply_lump_list(struct lump_rpl *lump);
 
 void unlink_lump_rpl(struct sip_msg *, struct lump_rpl *);
 

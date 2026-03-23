@@ -20,21 +20,22 @@
  *
  */
 
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "../../core/sr_module.h"
 #include "../../core/parser/parse_param.h"
 #include "../../core/data_lump.h"
+#include "../../core/kemi.h"
 #include "../../core/mem/mem.h"
 #include "../../core/mod_fix.h"
 #include "../../core/parser/parse_content.h"
 #include "../../core/parser/parse_body.h"
 #include "../../core/parser/parser_f.h"
 #include "../../core/trim.h"
-#include "ss7.h"
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
 
+#include "ss7.h"
 
 MODULE_VERSION
 
@@ -92,7 +93,7 @@ static int sipt_get_generic_number_nai(
 static int sipt_get_generic_number(
 		struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
 
-static int sipt_has_isup_body(struct sip_msg *msg, char *type, char *str2);
+static int sipt_has_isup_body(struct sip_msg *msg);
 
 /* New API */
 int sipt_parse_pv_name(pv_spec_p sp, str *in);
@@ -161,77 +162,58 @@ static int fixup_free_str_str_str(void **param, int param_no)
 	return E_CFG;
 }
 
-
+/* clang-format off */
 static cmd_export_t cmds[] = {
-		{"sipt_destination",					/* action name as in scripts */
-				(cmd_function)sipt_destination, /* C function name */
-				3,								/* number of parameters */
-				fixup_str_str_str, fixup_free_str_str_str, /* */
-				/* can be applied to original requests */
-				REQUEST_ROUTE | BRANCH_ROUTE},
-		{"sipt_destination",					 /* action name as in scripts */
-				(cmd_function)sipt_destination2, /* C function name */
-				4,								 /* number of parameters */
-				fixup_str_str_str, fixup_free_str_str_str, /* */
-				/* can be applied to original requests */
-				REQUEST_ROUTE | BRANCH_ROUTE},
-		{"sipt_forwarding",					   /* action name as in scripts */
-				(cmd_function)sipt_forwarding, /* C function name */
-				2,							   /* number of parameters */
-				fixup_str_str_str, fixup_free_str_str_str, /* */
-				/* can be applied to original requests */
-				REQUEST_ROUTE | BRANCH_ROUTE},
-		{"sipt_set_calling",					/* action name as in scripts */
-				(cmd_function)sipt_set_calling, /* C function name */
-				4,								/* number of parameters */
-				fixup_str_str_str, fixup_free_str_str_str, /* */
-				/* can be applied to original requests */
-				REQUEST_ROUTE | BRANCH_ROUTE},
-		{"sipt_set_bci_1",					  /* action name as in scripts */
-				(cmd_function)sipt_set_bci_1, /* C function name */
-				4,							  /* number of parameters */
-				fixup_str_str_str, fixup_free_str_str_str, /* */
-				/* can be applied to original requests */
-				ONREPLY_ROUTE},
-		{"sipt_has_isup_body", /* action name as in scripts */
-				(cmd_function)sipt_has_isup_body, /* C function name */
-				0,								  /* number of parameters */
-				0, 0,
-				/* can be applied to original requests */
-				ANY_ROUTE},
-		{0, 0, 0, 0, 0, 0}};
+	{"sipt_destination", (cmd_function)sipt_destination, 3,
+			fixup_str_str_str, fixup_free_str_str_str, REQUEST_ROUTE | BRANCH_ROUTE},
+	{"sipt_destination", (cmd_function)sipt_destination2, 4,
+			fixup_str_str_str, fixup_free_str_str_str, REQUEST_ROUTE | BRANCH_ROUTE},
+	{"sipt_forwarding",	(cmd_function)sipt_forwarding, 2,
+			fixup_str_str_str, fixup_free_str_str_str, REQUEST_ROUTE | BRANCH_ROUTE},
+	{"sipt_set_calling", (cmd_function)sipt_set_calling, 4,
+			fixup_str_str_str, fixup_free_str_str_str, REQUEST_ROUTE | BRANCH_ROUTE},
+	{"sipt_set_bci_1", (cmd_function)sipt_set_bci_1, 4,
+			fixup_str_str_str, fixup_free_str_str_str, ONREPLY_ROUTE},
+	{"sipt_has_isup_body", (cmd_function)sipt_has_isup_body, 0,
+			0, 0,	ANY_ROUTE},
+	{0, 0, 0, 0, 0, 0}
+};
 
-static param_export_t params[] = {{0, 0, 0}};
+static param_export_t params[] = {
+	{0, 0, 0}
+};
 
 static pv_export_t mod_items[] = {
-		{{"sipt_presentation", sizeof("sipt_presentation") - 1}, PVT_OTHER,
-				sipt_get_presentation, 0, 0, 0, 0, 0},
-		{{"sipt_screening", sizeof("sipt_screening") - 1}, PVT_OTHER,
-				sipt_get_screening, 0, 0, 0, 0, 0},
-		{{"sipt_hop_counter", sizeof("sipt_hop_counter") - 1}, PVT_OTHER,
-				sipt_get_hop_counter, 0, 0, 0, 0, 0},
-		{{"sipt_cpc", sizeof("sipt_cpc") - 1}, PVT_OTHER, sipt_get_cpc, 0, 0, 0,
-				0, 0},
-		{{"sipt_calling_party_nai", sizeof("sipt_calling_party_nai") - 1},
-				PVT_OTHER, sipt_get_calling_party_nai, 0, 0, 0, 0, 0},
-		{{"sipt_called_party_nai", sizeof("sipt_called_party_nai") - 1},
-				PVT_OTHER, sipt_get_called_party_nai, 0, 0, 0, 0, 0},
-		{{"sipt", sizeof("sipt") - 1}, PVT_OTHER, sipt_get_pv, 0,
-				sipt_parse_pv_name, 0, 0, 0},
-		{{0, 0}, 0, 0, 0, 0, 0, 0, 0}};
+	{{"sipt_presentation", sizeof("sipt_presentation") - 1}, PVT_OTHER,
+			sipt_get_presentation, 0, 0, 0, 0, 0},
+	{{"sipt_screening", sizeof("sipt_screening") - 1}, PVT_OTHER,
+			sipt_get_screening, 0, 0, 0, 0, 0},
+	{{"sipt_hop_counter", sizeof("sipt_hop_counter") - 1}, PVT_OTHER,
+			sipt_get_hop_counter, 0, 0, 0, 0, 0},
+	{{"sipt_cpc", sizeof("sipt_cpc") - 1}, PVT_OTHER,
+			sipt_get_cpc, 0, 0, 0, 0, 0},
+	{{"sipt_calling_party_nai", sizeof("sipt_calling_party_nai") - 1}, PVT_OTHER,
+			sipt_get_calling_party_nai, 0, 0, 0, 0, 0},
+	{{"sipt_called_party_nai", sizeof("sipt_called_party_nai") - 1}, PVT_OTHER,
+			sipt_get_called_party_nai, 0, 0, 0, 0, 0},
+	{{"sipt", sizeof("sipt") - 1}, PVT_OTHER,
+			sipt_get_pv, 0, sipt_parse_pv_name, 0, 0, 0},
+	{{0, 0}, 0, 0, 0, 0, 0, 0, 0}
+};
 
 struct module_exports exports = {
-		"sipt",			 /* module name */
-		DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,			 /* exported functions */
-		params,			 /* exported parameters */
-		0,				 /* exported RPC methods */
-		mod_items,		 /* exported pseudo-variables */
-		0,				 /* response function*/
-		mod_init,		 /* module initialization function */
-		0,				 /* per-child init function */
-		mod_destroy		 /* destroy function */
+  "sipt",         /* module name */
+  DEFAULT_DLFLAGS, /* dlopen flags */
+  cmds,            /* exported functions */
+  params,          /* exported parameters */
+  0,               /* exported RPC methods */
+  mod_items,       /* exported pseudo-variables */
+  0,               /* response function*/
+  mod_init,        /* module initialization function */
+  0,               /* per-child init function */
+  mod_destroy      /* destroy function */
 };
+/* clang-format on */
 
 static inline int sipt_check_IAM(struct sip_msg *msg, str *body)
 {
@@ -631,11 +613,19 @@ static int sipt_get_called_party(
 	return 0;
 }
 
-static int sipt_has_isup_body(struct sip_msg *msg, char *foo, char *bar)
+static int sipt_has_isup_body(struct sip_msg *msg)
 {
 	str body;
 	body.s = get_body_part(msg, TYPE_APPLICATION, SUBTYPE_ISUP, &body.len);
 	return (body.s == NULL) ? -1 : 1;
+}
+
+/**
+ *
+ */
+static int ki_has_isup_body(sip_msg_t *msg)
+{
+	return (sipt_has_isup_body(msg) == 1) ? SR_KEMI_TRUE : SR_KEMI_FALSE;
 }
 
 int sipt_parse_pv_name(pv_spec_p sp, str *in)
@@ -889,12 +879,36 @@ static int sipt_set_bci_1(struct sip_msg *msg, char *_charge_indicator,
 	return 1;
 }
 
+/**
+ *
+ */
+static int ki_set_bci_1(sip_msg_t *msg, str *_charge_indicator,
+		str *_called_status, str *_called_category, str *_e2e_indicator)
+{
+	return (sipt_set_bci_1(msg, _charge_indicator->s, _called_status->s,
+					_called_category->s, _e2e_indicator->s)
+				   == 1)
+				   ? SR_KEMI_TRUE
+				   : SR_KEMI_FALSE;
+}
+
 static int sipt_destination(
 		struct sip_msg *msg, char *_destination, char *_hops, char *_nai)
 {
 	str terminator = str_init("1");
 	return sipt_destination2(
 			msg, _destination, _hops, _nai, (char *)&terminator);
+}
+
+/**
+ *
+ */
+static int ki_destination(
+		sip_msg_t *msg, str *_destination, str *_hops, str *_nai)
+{
+	return (sipt_destination(msg, _destination->s, _hops->s, _nai->s) == 1)
+				   ? SR_KEMI_TRUE
+				   : SR_KEMI_FALSE;
 }
 
 static int sipt_destination2(struct sip_msg *msg, char *_destination,
@@ -962,6 +976,16 @@ static int sipt_destination2(struct sip_msg *msg, char *_destination,
 	return 1;
 }
 
+static int ki_destination_terminator(sip_msg_t *msg, str *_destination,
+		str *_hops, str *_nai, str *_terminator)
+{
+	return (sipt_destination2(
+					msg, _destination->s, _hops->s, _nai->s, _terminator->s)
+				   == 1)
+				   ? SR_KEMI_TRUE
+				   : SR_KEMI_FALSE;
+}
+
 static int sipt_set_calling(struct sip_msg *msg, char *_origin, char *_nai,
 		char *_pres, char *_screen)
 {
@@ -1019,6 +1043,18 @@ static int sipt_set_calling(struct sip_msg *msg, char *_origin, char *_nai,
 	return 1;
 }
 
+/**
+ *
+ */
+static int ki_set_calling(
+		sip_msg_t *msg, str *_origin, str *_nai, str *_pres, str *_screen)
+{
+	return (sipt_set_calling(msg, _origin->s, _nai->s, _pres->s, _screen->s)
+				   == 1)
+				   ? SR_KEMI_TRUE
+				   : SR_KEMI_FALSE;
+}
+
 static int sipt_forwarding(struct sip_msg *msg, char *_fwdnumber, char *_nai)
 {
 	str *nai = (str *)_nai;
@@ -1072,6 +1108,14 @@ static int sipt_forwarding(struct sip_msg *msg, char *_fwdnumber, char *_nai)
 	return 1;
 }
 
+/**
+ *
+ */
+static int ki_forwarding(sip_msg_t *msg, str *_fwdnumber, str *_nai)
+{
+	return (sipt_forwarding(msg, _fwdnumber->s, _nai->s) == 1) ? SR_KEMI_TRUE
+															   : SR_KEMI_FALSE;
+}
 
 static int mod_init(void)
 {
@@ -1081,4 +1125,47 @@ static int mod_init(void)
 
 static void mod_destroy(void)
 {
+}
+
+/**
+ *
+ */
+/* clang-format off */
+static sr_kemi_t sr_kemi_sipt_exports[] = {
+	{ str_init("sipt"), str_init("destination"),
+		SR_KEMIP_BOOL, ki_destination,
+			{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+				SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }},
+	{ str_init("sipt"), str_init("destination_terminator"),
+		SR_KEMIP_BOOL, ki_destination_terminator,
+			{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+				SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }},
+	{ str_init("sipt"), str_init("forwarding"),
+		SR_KEMIP_BOOL, ki_forwarding,
+			{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_NONE,
+				SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }},
+	{ str_init("sipt"), str_init("has_isup_body"),
+		SR_KEMIP_BOOL, ki_has_isup_body,
+			{ SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE,
+				SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }},
+	{ str_init("sipt"), str_init("set_bci_1"),
+		SR_KEMIP_BOOL, ki_set_bci_1,
+			{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+				SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }},
+	{ str_init("sipt"), str_init("set_calling"),
+		SR_KEMIP_BOOL, ki_set_calling,
+			{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+				SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }},
+
+	{ {0, 0}, {0, 0}, 0, NULL, { 0, 0, 0, 0, 0, 0 } }
+};
+/* clang-format on */
+
+/**
+ *
+ */
+int mod_register(char *path, int *dlflags, void *p1, void *p2)
+{
+	sr_kemi_modules_add(sr_kemi_sipt_exports);
+	return 0;
 }

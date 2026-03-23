@@ -50,9 +50,9 @@ extern struct rr_binds uac_rrb;
 
 extern str restore_from_avp;
 extern str restore_to_avp;
-extern unsigned short restore_from_avp_type;
+extern avp_flags_t restore_from_avp_type;
 extern int_str restore_from_avp_name;
-extern unsigned short restore_to_avp_type;
+extern avp_flags_t restore_to_avp_type;
 extern int_str restore_to_avp_name;
 
 struct dlg_binds dlg_api;
@@ -246,10 +246,11 @@ int replace_uri(struct sip_msg *msg, str *display, str *uri,
 	struct cell *Trans;
 	str replace;
 	char *p;
+	str luri;
 	str param;
 	str buf;
 	msg_flags_t uac_flag;
-	int i;
+	int i, del_offset, del_len;
 	int_str avp_value;
 	struct dlg_cell *dlg = 0;
 	str *dlgvar_names;
@@ -313,10 +314,23 @@ int replace_uri(struct sip_msg *msg, str *display, str *uri,
 		l = 0;
 		/* first remove the existing display */
 		if(body->display.len) {
+			del_offset = body->display.s - msg->buf;
+			del_len = body->display.len;
+
 			LM_DBG("removing display [%.*s]\n", body->display.len,
 					body->display.s);
+
+			/* if removing display, also remove trailing spaces after it */
+			if(!display->len) {
+				p = body->display.s + body->display.len;
+				while(p < msg->buf + msg->len && *p == ' ') {
+					del_len++;
+					p++;
+				}
+			}
+
 			/* build del lump */
-			l = del_lump(msg, body->display.s - msg->buf, body->display.len, 0);
+			l = del_lump(msg, del_offset, del_len, 0);
 			if(l == 0) {
 				LM_ERR("display del lump failed\n");
 				goto error;
@@ -359,15 +373,31 @@ int replace_uri(struct sip_msg *msg, str *display, str *uri,
 		LM_ERR("del lump failed\n");
 		goto error;
 	}
-	p = pkg_malloc(uri->len);
-	if(p == 0) {
+	luri.len = uri->len;
+	if(!(body->style & TBS_URI_ENCLOSED)) {
+		/* existing uri not enclosed - check if new one has parameters */
+		for(p = uri->s + uri->len - 1; p > uri->s; p--) {
+			if(*p == ';') {
+				luri.len += 2;
+				break;
+			}
+		}
+	}
+	luri.s = pkg_malloc(luri.len);
+	if(luri.s == 0) {
 		PKG_MEM_ERROR;
 		goto error;
 	}
-	memcpy(p, uri->s, uri->len);
-	if(insert_new_lump_after(l, p, uri->len, 0) == 0) {
+	if(luri.len == uri->len + 2) {
+		luri.s[0] = '<';
+		memcpy(luri.s + 1, uri->s, uri->len);
+		luri.s[luri.len - 1] = '>';
+	} else {
+		memcpy(luri.s, uri->s, uri->len);
+	}
+	if(insert_new_lump_after(l, luri.s, luri.len, 0) == 0) {
 		LM_ERR("insert new lump failed\n");
-		pkg_free(p);
+		pkg_free(luri.s);
 		goto error;
 	}
 
@@ -810,15 +840,22 @@ void restore_uris_reply(struct cell *t, int type, struct tmcb_params *p)
 	struct sip_msg *req;
 	struct sip_msg *rpl;
 	int_str avp_value;
+	unsigned int direction = 0;
 
 	if(!t || !t->uas.request || !p->rpl)
 		return;
 
+	if(*p->param) {
+		direction = (unsigned int)(unsigned long)*p->param;
+	}
+
 	req = t->uas.request;
 	rpl = p->rpl;
 
-	if(req->msg_flags & FL_USE_UAC_FROM) {
-
+	if(((req->msg_flags & FL_USE_UAC_FROM)
+			   && (!direction || direction == DLG_DIR_DOWNSTREAM))
+			|| ((req->msg_flags & FL_USE_UAC_TO)
+					&& direction == DLG_DIR_UPSTREAM)) {
 		/* parse FROM in reply */
 		if(parse_from_header(rpl) < 0) {
 			LM_ERR("failed to find/parse FROM hdr\n");
@@ -835,8 +872,11 @@ void restore_uris_reply(struct cell *t, int type, struct tmcb_params *p)
 			LM_ERR("failed to restore FROM\n");
 		}
 	}
-	if(req->msg_flags & FL_USE_UAC_TO) {
 
+	if(((req->msg_flags & FL_USE_UAC_TO)
+			   && (!direction || direction == DLG_DIR_DOWNSTREAM))
+			|| ((req->msg_flags & FL_USE_UAC_FROM)
+					&& direction == DLG_DIR_UPSTREAM)) {
 		/* parse TO in reply */
 		if(rpl->to == 0
 				&& (parse_headers(rpl, HDR_TO_F, 0) != 0 || rpl->to == 0)) {
@@ -874,6 +914,7 @@ static void replace_callback(
 	int dlgvar_index = 0;
 	int dlgvar_dpindex = 0;
 	str *dlgvar_names;
+	struct cell *Trans;
 
 	if(!dlg || !_params || _params->direction == DLG_DIR_NONE || !_params->req)
 		return;
@@ -997,13 +1038,19 @@ static void replace_callback(
 	/* register tm callback to change replies,
 	 * but only if not registered earlier */
 	if(!(msg->msg_flags & (FL_USE_UAC_FROM | FL_USE_UAC_TO))
-			&& uac_tmb.register_tmcb(
-					   msg, 0, TMCB_RESPONSE_IN, restore_uris_reply, 0, 0)
+			&& uac_tmb.register_tmcb(msg, 0, TMCB_RESPONSE_IN,
+					   restore_uris_reply,
+					   (void *)(unsigned long)_params->direction, 0)
 					   != 1) {
 		LM_ERR("failed to install TM callback\n");
 		return;
 	}
 	msg->msg_flags |= uac_flag;
+
+	if((Trans = uac_tmb.t_gett()) != NULL && Trans != T_UNDEFINED
+			&& Trans->uas.request) {
+		Trans->uas.request->msg_flags |= uac_flag;
+	}
 
 	return;
 }

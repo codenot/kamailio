@@ -7,7 +7,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -17,7 +17,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -27,6 +27,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -229,7 +231,7 @@ int mem_insert_pcontact(struct udomain *_d, str *_contact,
 {
 	int sl;
 
-	if(new_pcontact(_d->name, _contact, _ci, _c) < 0) {
+	if(new_pcontact(_d, _contact, _ci, _c) < 0) {
 		LM_ERR("creating pcontact failed\n");
 		return -1;
 	}
@@ -496,7 +498,7 @@ int get_pcontact_from_cache(udomain_t *_d, pcontact_info_t *contact_info,
 					contact_info->aor.len, contact_info->aor.s);
 			return 1;
 		}
-		LM_DBG("checking for rinstance");
+		LM_DBG("checking for rinstance\n");
 		/*check for alias - NAT */
 		params = needle_uri.sip_params.s;
 		params_len = needle_uri.sip_params.len;
@@ -548,7 +550,7 @@ int get_pcontact_from_cache(udomain_t *_d, pcontact_info_t *contact_info,
 			int check2_passed = 0;
 			ip_addr_t c_ip_addr;
 			ip_addr_t ci_ip_addr;
-			LM_DBG("mached a record by aorhash: %u\n", aorhash);
+			LM_DBG("matched a record by aorhash: %u\n", aorhash);
 
 			// convert 'contact->contact host' ip string to ip_addr_t
 			if(str2ipxbuf(&c->contact_host, &c_ip_addr) < 0) {
@@ -594,8 +596,8 @@ int get_pcontact_from_cache(udomain_t *_d, pcontact_info_t *contact_info,
 				if(ip_addr_cmp(&c_ip_addr, &ci_ip_addr)
 						&& ((c->received_port == contact_info->received_port)
 								|| (c->contact_port
-										== contact_info
-												   ->received_port))) { /*volte comes from a different port.... typically uses 4060*/
+										== contact_info->received_port))) {
+					/*volte comes from a different port.... typically uses 4060*/
 					check2_passed = 1;
 				}
 			}
@@ -694,13 +696,15 @@ int get_pcontact_from_cache(udomain_t *_d, pcontact_info_t *contact_info,
 				//finally check state being searched for
 				if((contact_info->reg_state != PCONTACT_ANY)
 						&& ((contact_info->reg_state & c->reg_state) == 0)) {
-					LM_DBG("can't find contact for requested reg state [%d] - "
-						   "(have [%d])\n",
-							contact_info->reg_state, c->reg_state);
+					LM_DBG("can't find contact for requested reg state [%s] - "
+						   "(have [%s])\n",
+							reg_state_to_string(contact_info->reg_state),
+							reg_state_to_string(c->reg_state));
 					c = reverse_search ? c->prev : c->next;
 					continue;
 				}
-				LM_DBG("contact found in memory\n");
+				LM_DBG("contact found in memory, reg_state[%s]\n",
+						reg_state_to_string(c->reg_state));
 				*_c = c;
 				return 0;
 			}
@@ -829,10 +833,10 @@ int unreg_pending_contacts_cb(udomain_t *_d, pcontact_t *_c, int type)
 	contact_info.reg_state = PCONTACT_ANY;
 
 	LM_DBG("Searching for contact in P-CSCF usrloc based on VIA "
-		   "[%d://%.*s:%d], reg state 0x%02X\n",
+		   "[%d://%.*s:%d], reg state %s\n",
 			contact_info.via_prot, contact_info.via_host.len,
 			contact_info.via_host.s, contact_info.via_port,
-			contact_info.reg_state);
+			reg_state_to_string(contact_info.reg_state));
 
 	aorhash = get_aor_hash(_d, &contact_info.via_host, contact_info.via_port,
 			contact_info.via_prot);
@@ -873,9 +877,10 @@ int unreg_pending_contacts_cb(udomain_t *_d, pcontact_t *_c, int type)
 				// finally check state being searched for
 				if((contact_info.reg_state != PCONTACT_ANY)
 						&& ((contact_info.reg_state & c->reg_state) == 0)) {
-					LM_DBG("can't find contact for requested reg state [%d] - "
-						   "(have [%d])\n",
-							contact_info.reg_state, c->reg_state);
+					LM_DBG("can't find contact for requested reg state [%s] - "
+						   "(have [%s])\n",
+							reg_state_to_string(contact_info.reg_state),
+							reg_state_to_string(c->reg_state));
 					c = c->next;
 					continue;
 				}
@@ -900,9 +905,10 @@ int unreg_pending_contacts_cb(udomain_t *_d, pcontact_t *_c, int type)
 					continue;
 				}
 
-				LM_DBG("=========== c->reg_state 0x%02X, %u-%u | %u-%u | %u-%u "
+				LM_DBG("=========== c->reg_state %s, %u-%u | %u-%u | %u-%u "
 					   "| %u-%u | %u-%u | %u-%u | %u-%u | %u-%u |",
-						c->reg_state, c->security_temp->data.ipsec->port_pc,
+						reg_state_to_string(c->reg_state),
+						c->security_temp->data.ipsec->port_pc,
 						_c->security_temp->data.ipsec->port_pc,
 						c->security_temp->data.ipsec->port_ps,
 						_c->security_temp->data.ipsec->port_ps,

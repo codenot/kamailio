@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -87,6 +89,7 @@ static struct dtrie_node_t *gnode = NULL;
 
 /* ---- fixup functions: */
 static int check_blocklist_fixup(void **param, int param_no);
+static int check_blocklist_fixup_free(void **arg, int arg_no);
 static int check_user_blocklist_fixup(void **param, int param_no);
 static int check_globalblocklist_fixup(void **param, int param_no);
 
@@ -112,60 +115,53 @@ static int child_init(int rank);
 static int rpc_child_init(void);
 static void mod_destroy(void);
 
+/* clang-format off */
 static cmd_export_t cmds[] = {
-		{"check_user_blocklist", (cmd_function)check_user_blocklist2, 2,
-				check_user_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_user_allowlist", (cmd_function)check_user_allowlist2, 2,
-				check_user_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_user_blocklist", (cmd_function)check_user_blocklist3, 3,
-				check_user_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_user_allowlist", (cmd_function)check_user_allowlist3, 3,
-				check_user_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_user_blocklist", (cmd_function)check_user_blocklist, 4,
-				check_user_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_user_allowlist", (cmd_function)check_user_allowlist, 4,
-				check_user_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_blocklist", (cmd_function)check_blocklist, 1,
-				check_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_allowlist", (cmd_function)check_allowlist, 1,
-				check_blocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{"check_blocklist", (cmd_function)check_globalblocklist, 0,
-				check_globalblocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
-		{0, 0, 0, 0, 0, 0}};
-
-
-static param_export_t params[] = {
-		userblocklist_DB_URL userblocklist_DB_TABLE globalblocklist_DB_TABLE
-				userblocklist_DB_COLS globalblocklist_DB_COLS{
-						"use_domain", INT_PARAM, &use_domain},
-		{"match_mode", INT_PARAM, &match_mode}, {0, 0, 0}};
-
-
-#ifdef MI_REMOVED
-/* Exported MI functions */
-static mi_export_t mi_cmds[] = {{"reload_blocklist", mi_reload_blocklist,
-										MI_NO_INPUT_FLAG, 0, mi_child_init},
-		{"dump_blocklist", mi_dump_blocklist, MI_NO_INPUT_FLAG, 0, 0},
-		{"check_blocklist", mi_check_blocklist, 0, 0, 0},
-		{"check_allowlist", mi_check_allowlist, 0, 0, 0},
-		{"check_userblocklist", mi_check_userblocklist, 0, 0, 0},
-		{"check_userallowlist", mi_check_userallowlist, 0, 0, 0},
-		{0, 0, 0, 0, 0}};
-#endif
-
-struct module_exports exports = {
-		"userblocklist", /* module name */
-		DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,			 /* cmd (cfg function) exports */
-		params,			 /* param exports */
-		0,				 /* RPC method exports */
-		0,				 /* pseudo-variables exports */
-		0,				 /* response handling function */
-		mod_init,		 /* module init function */
-		child_init,		 /* per-child init function */
-		mod_destroy		 /* module destroy function */
+	{"check_user_blocklist", (cmd_function)check_user_blocklist2, 2,
+			check_user_blocklist_fixup, fixup_free_spve_null, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_user_allowlist", (cmd_function)check_user_allowlist2, 2,
+			check_user_blocklist_fixup, fixup_free_spve_null, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_user_blocklist", (cmd_function)check_user_blocklist3, 3,
+			check_user_blocklist_fixup, fixup_free_spve_null, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_user_allowlist", (cmd_function)check_user_allowlist3, 3,
+			check_user_blocklist_fixup, fixup_free_spve_null, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_user_blocklist", (cmd_function)check_user_blocklist, 4,
+			check_user_blocklist_fixup, fixup_free_spve_null, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_user_allowlist", (cmd_function)check_user_allowlist, 4,
+			check_user_blocklist_fixup, fixup_free_spve_null, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_blocklist", (cmd_function)check_blocklist, 1,
+			check_blocklist_fixup, check_blocklist_fixup_free, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_allowlist", (cmd_function)check_allowlist, 1,
+			check_blocklist_fixup, check_blocklist_fixup_free, REQUEST_ROUTE | FAILURE_ROUTE},
+	{"check_blocklist", (cmd_function)check_globalblocklist, 0,
+			check_globalblocklist_fixup, 0, REQUEST_ROUTE | FAILURE_ROUTE},
+	{0, 0, 0, 0, 0, 0}
 };
 
+static param_export_t params[] = {
+	userblocklist_DB_URL
+	userblocklist_DB_TABLE
+	globalblocklist_DB_TABLE
+	userblocklist_DB_COLS
+	globalblocklist_DB_COLS
+	{"use_domain", PARAM_INT, &use_domain},
+	{"match_mode", PARAM_INT, &match_mode},
+	{0, 0, 0}
+};
+
+struct module_exports exports = {
+	"userblocklist", /* module name */
+	DEFAULT_DLFLAGS, /* dlopen flags */
+	cmds,            /* cmd (cfg function) exports */
+	params,          /* param exports */
+	0,               /* RPC method exports */
+	0,               /* pseudo-variables exports */
+	0,               /* response handling function */
+	mod_init,        /* module init function */
+	child_init,      /* per-child init function */
+	mod_destroy      /* module destroy function */
+};
+/* clang-format on */
 
 struct source_t
 {
@@ -608,6 +604,12 @@ static int check_blocklist_fixup(void **arg, int arg_no)
 	return 0;
 }
 
+static int check_blocklist_fixup_free(void **arg, int arg_no)
+{
+	pkg_free(*arg);
+	return 0;
+}
+
 static int ki_check_blocklist(sip_msg_t *msg, str *stable)
 {
 	struct dtrie_node_t *node = NULL;
@@ -822,7 +824,7 @@ static int init_source_list(void)
 }
 
 
-static void destroy_source_list(void)
+void ubl_destroy_source_list(void)
 {
 	if(sources) {
 		while(sources->head) {
@@ -857,7 +859,7 @@ static int init_shmlock(void)
 }
 
 
-static void destroy_shmlock(void)
+void ubl_destroy_shmlock(void)
 {
 	if(lock) {
 		lock_destroy(lock);
@@ -865,399 +867,6 @@ static void destroy_shmlock(void)
 		lock = NULL;
 	}
 }
-
-#ifdef MI_REMOVED
-static void dump_dtrie_mi(const struct dtrie_node_t *root,
-		const unsigned int branches, char *prefix, int *length,
-		struct mi_root *reply)
-{
-	struct mi_node *crt_node;
-	unsigned int i;
-	char digit, *val = NULL;
-	int val_len = 0;
-
-	/* Sanity check - should not reach here anyway */
-	if(NULL == root) {
-		LM_ERR("root dtrie is NULL\n");
-		return;
-	}
-
-	/* If data found, add a new node to the reply tree */
-	if(root->data) {
-		/* Create new node and add it to the roots' kids */
-		if(!(crt_node = add_mi_node_child(
-					 &reply->node, MI_DUP_NAME, prefix, *length, 0, 0))) {
-			LM_ERR("cannot add the child node to the tree\n");
-			return;
-		}
-
-		/* Resolve the value of the allowlist attribute */
-		if(root->data == (void *)MARK_BLOCKLIST) {
-			val = int2str(0, &val_len);
-		} else if(root->data == (void *)MARK_ALLOWLIST) {
-			val = int2str(1, &val_len);
-		}
-
-		/* Add the attribute to the current node */
-		if((add_mi_attr(crt_node, MI_DUP_VALUE, userblocklist_allowlist_col.s,
-				   userblocklist_allowlist_col.len, val, val_len))
-				== 0) {
-			LM_ERR("cannot add attributes to the node\n");
-			return;
-		}
-	}
-
-	/* Perform a DFS search */
-	for(i = 0; i < branches; i++) {
-		/* If child branch found, traverse it */
-		if(root->child[i]) {
-			if(branches == 10) {
-				digit = i + '0';
-			} else {
-				digit = i;
-			}
-
-			/* Push digit in prefix stack */
-			if(*length >= MAXNUMBERLEN + 1) {
-				LM_ERR("prefix length exceeds %d\n", MAXNUMBERLEN + 1);
-				return;
-			}
-			prefix[(*length)++] = digit;
-
-			/* Recursive DFS call */
-			dump_dtrie_mi(root->child[i], branches, prefix, length, reply);
-
-			/* Pop digit from prefix stack */
-			(*length)--;
-		}
-	}
-
-	return;
-}
-
-
-static struct mi_root *check_list_mi(struct mi_root *cmd, int list_type)
-{
-	struct mi_root *tmp = NULL;
-	struct mi_node *crt_node, *node;
-	struct mi_attr *crt_attr;
-	void **nodeflags;
-	int ret = -1;
-	char *ptr;
-	char req_prefix[MAXNUMBERLEN + 1];
-	str prefix, val, attr;
-
-	node = cmd->node.kids;
-
-	/* Get the prefix number */
-	if(NULL == node)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	if(NULL == node->value.s || node->value.len == 0)
-		return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-	prefix = node->value;
-	strncpy(req_prefix, prefix.s, prefix.len);
-	req_prefix[prefix.len] = '\0';
-
-	/* Check that just 1 argument is given */
-	node = node->next;
-	if(node)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	/* Check that global blocklist exists */
-	if(!gnode) {
-		LM_ERR("the global blocklist is NULL\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Check that reply tree is successfully initialized */
-	tmp = init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-	if(!tmp) {
-		LM_ERR("the MI tree cannot be initialized!\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Skip over non-digits. */
-	ptr = req_prefix;
-	while(match_mode == 10 && strlen(ptr) > 0 && !isdigit(*ptr)) {
-		ptr = ptr + 1;
-	}
-
-	/* Avoids dirty reads when updating d-tree */
-	lock_get(lock);
-	nodeflags = dtrie_longest_match(gnode, ptr, strlen(ptr), NULL, match_mode);
-	if(nodeflags) {
-		if(*nodeflags == (void *)MARK_ALLOWLIST) {
-			LM_DBG("prefix %.*s is allowlisted in table %.*s\n", prefix.len,
-					prefix.s, globalblocklist_table.len,
-					globalblocklist_table.s);
-			ret = MARK_ALLOWLIST;
-		} else if(*nodeflags == (void *)MARK_BLOCKLIST) {
-			LM_DBG("prefix %.*s is blocklisted in table %.*s\n", prefix.len,
-					prefix.s, globalblocklist_table.len,
-					globalblocklist_table.s);
-			ret = MARK_BLOCKLIST;
-		}
-	} else {
-		LM_DBG("prefix %.*s not found in table %.*s\n", prefix.len, prefix.s,
-				globalblocklist_table.len, globalblocklist_table.s);
-	}
-	lock_release(lock);
-
-	/* Create new node and add it to the reply roots' kids */
-	if(!(crt_node = add_mi_node_child(
-				 &tmp->node, MI_DUP_NAME, prefix.s, prefix.len, 0, 0))) {
-		LM_ERR("cannot add the child node to the tree\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Resolve the value of the attribute to be returned */
-	val.s = FALSE_S;
-	val.len = FALSE_LEN;
-
-	switch(list_type) {
-		case MARK_ALLOWLIST:
-			attr.s = ALLOWLISTED_S;
-			attr.len = ALLOWLISTED_LEN;
-
-			if(ret == MARK_ALLOWLIST) {
-				val.s = TRUE_S;
-				val.len = TRUE_LEN;
-			}
-
-			break;
-		case MARK_BLOCKLIST:
-			attr.s = BLOCKLISTED_S;
-			attr.len = BLOCKLISTED_LEN;
-
-			if(ret == MARK_BLOCKLIST) {
-				val.s = TRUE_S;
-				val.len = TRUE_LEN;
-			}
-
-			break;
-		default:
-			LM_ERR("list_type not found\n");
-			return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Add the attribute to the current node */
-	if(!(crt_attr = add_mi_attr(
-				 crt_node, MI_DUP_VALUE, attr.s, attr.len, val.s, val.len))) {
-		LM_ERR("cannot add attribute to the node\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	return tmp;
-}
-
-
-static struct mi_root *check_userlist_mi(struct mi_root *cmd, int list_type)
-{
-	struct mi_root *tmp = NULL;
-	struct mi_node *crt_node, *node;
-	struct mi_attr *crt_attr;
-	void **nodeflags;
-	int ret = -1;
-	int local_use_domain = 0;
-	char *ptr;
-	char req_prefix[MAXNUMBERLEN + 1];
-	str user, prefix, table, val, attr, domain;
-
-	node = cmd->node.kids;
-
-	/* Get the user number */
-	if(NULL == node)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	if(NULL == node->value.s || node->value.len == 0)
-		return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-	user = node->value;
-
-	/* Get the domain name */
-	node = node->next;
-	if(NULL == node)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	if(NULL == node->value.s || node->value.len == 0)
-		return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-	domain = node->value;
-
-	/* Get the prefix number */
-	node = node->next;
-	if(node) {
-		/* Got 3 params, the third one is the prefix */
-		if(NULL == node->value.s || node->value.len == 0)
-			return init_mi_tree(400, MI_BAD_PARM_S, MI_BAD_PARM_LEN);
-		prefix = node->value;
-		local_use_domain = 1;
-	} else {
-		/* Got 2 params, the second one is the prefix */
-		prefix = domain;
-		local_use_domain = 0;
-	}
-
-	strncpy(req_prefix, prefix.s, prefix.len);
-	req_prefix[prefix.len] = '\0';
-
-	/* Check that a maximum of 3 arguments are given */
-	if(node)
-		node = node->next;
-	if(node)
-		return init_mi_tree(400, MI_MISSING_PARM_S, MI_MISSING_PARM_LEN);
-
-	/* Build userblocklist dtrie */
-	table = userblocklist_table;
-	LM_DBG("check entry %s for user %.*s@%.*s in table %.*s, use domain=%d\n",
-			req_prefix, user.len, user.s, domain.len, domain.s, table.len,
-			table.s, local_use_domain);
-	if(db_build_userbl_tree(
-			   &user, &domain, &table, dtrie_root, local_use_domain)
-			< 0) {
-		LM_ERR("cannot build d-tree\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Check that reply tree is successfully initialized */
-	tmp = init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-	if(!tmp) {
-		LM_ERR("the MI tree cannot be initialized!\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Skip over non-digits. */
-	ptr = req_prefix;
-	while(match_mode == 10 && strlen(ptr) > 0 && !isdigit(*ptr)) {
-		ptr = ptr + 1;
-	}
-
-	/* Search for a match in dtrie */
-	nodeflags =
-			dtrie_longest_match(dtrie_root, ptr, strlen(ptr), NULL, match_mode);
-	if(nodeflags) {
-		if(*nodeflags == (void *)MARK_ALLOWLIST) {
-			LM_DBG("user %.*s is allowlisted for prefix %.*s in table %.*s\n",
-					user.len, user.s, prefix.len, prefix.s, table.len, table.s);
-			ret = MARK_ALLOWLIST;
-		} else if(*nodeflags == (void *)MARK_BLOCKLIST) {
-			LM_DBG("user %.*s is blocklisted for prefix %.*s in table %.*s\n",
-					user.len, user.s, prefix.len, prefix.s, table.len, table.s);
-			ret = MARK_BLOCKLIST;
-		}
-	} else {
-		LM_DBG("user %.*s, prefix %.*s not found in table %.*s\n", user.len,
-				user.s, prefix.len, prefix.s, table.len, table.s);
-	}
-
-
-	/* Create new node and add it to the reply roots' kids */
-	if(!(crt_node = add_mi_node_child(
-				 &tmp->node, MI_DUP_NAME, prefix.s, prefix.len, 0, 0))) {
-		LM_ERR("cannot add the child node to the tree\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Resolve the value of the attribute to be returned */
-	val.s = FALSE_S;
-	val.len = FALSE_LEN;
-
-	switch(list_type) {
-		case MARK_ALLOWLIST:
-			attr.s = ALLOWLISTED_S;
-			attr.len = ALLOWLISTED_LEN;
-
-			if(ret == MARK_ALLOWLIST) {
-				val.s = TRUE_S;
-				val.len = TRUE_LEN;
-			}
-
-			break;
-		case MARK_BLOCKLIST:
-			attr.s = BLOCKLISTED_S;
-			attr.len = BLOCKLISTED_LEN;
-
-			if(ret == MARK_BLOCKLIST) {
-				val.s = TRUE_S;
-				val.len = TRUE_LEN;
-			}
-
-			break;
-		default:
-			LM_ERR("list_type not found\n");
-			return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	/* Add the attribute to the current node */
-	if(!(crt_attr = add_mi_attr(
-				 crt_node, MI_DUP_VALUE, attr.s, attr.len, val.s, val.len))) {
-		LM_ERR("cannot add attribute to the node\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	return tmp;
-}
-
-
-struct mi_root *mi_reload_blocklist(struct mi_root *cmd, void *param)
-{
-	struct mi_root *tmp = NULL;
-	if(reload_sources() == 0) {
-		tmp = init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-	} else {
-		tmp = init_mi_tree(500, "cannot reload blocklist", 21);
-	}
-
-	return tmp;
-}
-
-
-struct mi_root *mi_dump_blocklist(struct mi_root *cmd, void *param)
-{
-	char prefix_buff[MAXNUMBERLEN + 1];
-	int length = 0;
-	struct mi_root *tmp = NULL;
-
-	/* Check that global blocklist exists */
-	if(!gnode) {
-		LM_ERR("the global blocklist is NULL\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	tmp = init_mi_tree(200, MI_OK_S, MI_OK_LEN);
-	if(!tmp) {
-		LM_ERR("the MI tree cannot be initialized!\n");
-		return init_mi_tree(500, MI_INTERNAL_ERR_S, MI_INTERNAL_ERR_LEN);
-	}
-
-	dump_dtrie_mi(gnode, match_mode, prefix_buff, &length, tmp);
-
-	return tmp;
-}
-
-
-struct mi_root *mi_check_blocklist(struct mi_root *cmd, void *param)
-{
-	return check_list_mi(cmd, MARK_BLOCKLIST);
-}
-
-
-struct mi_root *mi_check_allowlist(struct mi_root *cmd, void *param)
-{
-	return check_list_mi(cmd, MARK_ALLOWLIST);
-}
-
-
-struct mi_root *mi_check_userblocklist(struct mi_root *cmd, void *param)
-{
-	return check_userlist_mi(cmd, MARK_BLOCKLIST);
-}
-
-
-struct mi_root *mi_check_userallowlist(struct mi_root *cmd, void *param)
-{
-	return check_userlist_mi(cmd, MARK_ALLOWLIST);
-}
-#endif
 
 static void dump_dtrie_rpc(rpc_t *rpc, void *ctx,
 		const struct dtrie_node_t *root, const unsigned int branches,
@@ -1681,10 +1290,6 @@ static int rpc_child_init(void)
 
 static void mod_destroy(void)
 {
-	destroy_source_list();
-	destroy_shmlock();
-	userblocklist_db_close();
-	dtrie_destroy(&dtrie_root, NULL, match_mode);
 }
 
 /**

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -57,7 +59,7 @@
 #include <stddef.h> /* for offsetof */
 
 
-struct sr_module *modules = 0;
+static struct sr_module *_ksr_modules_list = NULL;
 static str_list_t *_ksr_loadmod_strlist = NULL;
 
 
@@ -334,8 +336,8 @@ static int register_module(module_exports_t *e, char *path, void *handle)
 	}
 
 	/* link module in the list */
-	mod->next = modules;
-	modules = mod;
+	mod->next = _ksr_modules_list;
+	_ksr_modules_list = mod;
 	return 0;
 error:
 	if(mod)
@@ -408,12 +410,14 @@ int ksr_locate_module(char *mod_path, char **new_path)
 	int mdir_len;
 	int path_type;
 	int len;
+	int mod_path_len;
 
 	*new_path = NULL;
+	mod_path_len = strlen(mod_path);
 	path = mod_path;
 	path_type = 0;
 	modfile.s = path;
-	modfile.len = strlen(mod_path);
+	modfile.len = mod_path_len;
 	modname.s = modfile.s;
 	if(modfile.len > 3 && strcmp(modfile.s + modfile.len - 3, ".so") == 0) {
 		path_type = 1;
@@ -500,7 +504,7 @@ int ksr_locate_module(char *mod_path, char **new_path)
 				if(path == 0) {
 					/* try path <MODS_DIR>/mod_path - K compat */
 					path = (char *)pkg_malloc(
-							mdir_len + 1 /* "/" */ + strlen(mod_path) + 1);
+							mdir_len + 1 /* "/" */ + mod_path_len + 1);
 					if(path == 0) {
 						PKG_MEM_ERROR;
 						goto error;
@@ -511,8 +515,8 @@ int ksr_locate_module(char *mod_path, char **new_path)
 						path[len] = '/';
 						len++;
 					}
-					path[len] = 0;
-					strncat(path, mod_path, strlen(mod_path));
+					memcpy(path + len, mod_path, mod_path_len);
+					path[len + mod_path_len] = 0;
 
 					if(stat(path, &stat_buf) == -1) {
 						LM_DBG("module file not found <%s>\n", path);
@@ -535,9 +539,6 @@ int ksr_locate_module(char *mod_path, char **new_path)
 	return 0;
 
 error:
-	if(path != NULL && path != mod_path) {
-		pkg_free(path);
-	}
 
 	return -1;
 }
@@ -566,6 +567,7 @@ int ksr_load_module(char *mod_path, char *opts)
 	module_exports_t *exp;
 	struct sr_module *t;
 	int dlflags;
+	int ldopt;
 	int new_dlflags;
 	int retries;
 	char *path = NULL;
@@ -591,11 +593,14 @@ int ksr_load_module(char *mod_path, char *opts)
 
 	retries = 2;
 	dlflags = RTLD_NOW;
+	ldopt = 0;
 
 	if(opts != NULL) {
 		for(p = opts; *p != '\0'; p++) {
 			if(*p == 'G' || *p == 'g') {
 				dlflags |= RTLD_GLOBAL;
+			} else if(*p == 'O' || *p == 'o') {
+				ldopt = 1;
 			} else {
 				LM_INFO("unknown option: %c\n", *p);
 			}
@@ -609,8 +614,17 @@ reload:
 		goto error;
 	}
 
-	for(t = modules; t; t = t->next) {
+	for(t = _ksr_modules_list; t; t = t->next) {
 		if(t->handle == handle) {
+			if(ldopt == 1) {
+				if(path) {
+					LM_DBG("skip loading optional module twice (%s)\n", path);
+					if(path != mod_path) {
+						pkg_free(path);
+					}
+				}
+				return 0;
+			}
 			LM_WARN("attempting to load the same module twice (%s)\n", path);
 			goto skip;
 		}
@@ -749,7 +763,7 @@ ksr_cmd_export_t *find_mod_export_record(
 	struct sr_module *t;
 	ksr_cmd_export_t *cmd;
 
-	for(t = modules; t; t = t->next) {
+	for(t = _ksr_modules_list; t; t = t->next) {
 		if(mod != 0 && (strcmp(t->exports.name, mod) != 0))
 			continue;
 		if(t->exports.cmds)
@@ -818,7 +832,7 @@ struct sr_module *find_module_by_name(char *mod)
 {
 	struct sr_module *t;
 
-	for(t = modules; t; t = t->next) {
+	for(t = _ksr_modules_list; t; t = t->next) {
 		if(strcmp(mod, t->exports.name) == 0) {
 			return t;
 		}
@@ -829,7 +843,7 @@ struct sr_module *find_module_by_name(char *mod)
 
 sr_module_t *get_loaded_modules(void)
 {
-	return modules;
+	return _ksr_modules_list;
 }
 
 /*!
@@ -874,7 +888,7 @@ void destroy_modules()
 	LM_DBG("starting modules destroy phase\n");
 
 	/* call first destroy function from each module */
-	t = modules;
+	t = _ksr_modules_list;
 	while(t) {
 		foo = t->next;
 		if(t->exports.destroy_mod_f) {
@@ -883,13 +897,13 @@ void destroy_modules()
 		t = foo;
 	}
 	/* free module exports structures */
-	t = modules;
+	t = _ksr_modules_list;
 	while(t) {
 		foo = t->next;
 		pkg_free(t);
 		t = foo;
 	}
-	modules = 0;
+	_ksr_modules_list = 0;
 	if(mod_response_cbks) {
 		pkg_free(mod_response_cbks);
 		mod_response_cbks = 0;
@@ -996,7 +1010,7 @@ int init_child(int rank)
 		}
 	}
 
-	ret = init_mod_child(modules, rank);
+	ret = init_mod_child(_ksr_modules_list, rank);
 	if(rank != PROC_INIT && rank != PROC_POSTCHILDINIT) {
 		pt[process_no].status = 1;
 	}
@@ -1064,11 +1078,11 @@ int init_modules(void)
 	if(async_task_init() < 0)
 		return -1;
 
-	i = init_mod(modules);
+	i = init_mod(_ksr_modules_list);
 	if(i != 0)
 		return i;
 
-	for(t = modules; t; t = t->next)
+	for(t = _ksr_modules_list; t; t = t->next)
 		if(t->exports.response_f)
 			mod_response_cbk_no++;
 	mod_response_cbks =
@@ -1077,7 +1091,8 @@ int init_modules(void)
 		PKG_MEM_ERROR;
 		return -1;
 	}
-	for(t = modules, i = 0; t && (i < mod_response_cbk_no); t = t->next)
+	for(t = _ksr_modules_list, i = 0; t && (i < mod_response_cbk_no);
+			t = t->next)
 		if(t->exports.response_f) {
 			mod_response_cbks[i] = t->exports.response_f;
 			i++;
@@ -1226,13 +1241,22 @@ int fix_param(int type, void **param)
 		case FPARAM_INT:
 			s.s = (char *)*param;
 			s.len = strlen(s.s);
-			err = str2sint(&s, &num);
-			if(err == 0) {
-				p->v.i = (int)num;
+			if(s.len > 2 && s.s[0] == '0' && s.s[1] == 'x') {
+				if(hexstr2int(s.s, s.len, (unsigned int *)&num) < 0) {
+					/* not a hex number */
+					pkg_free(p);
+					return 1;
+				}
+				p->v.i = num;
 			} else {
-				/* Not a number */
-				pkg_free(p);
-				return 1;
+				err = str2sint(&s, &num);
+				if(err == 0) {
+					p->v.i = (int)num;
+				} else {
+					/* not a number */
+					pkg_free(p);
+					return 1;
+				}
 			}
 			p->fixed = (void *)(long)num;
 			break;

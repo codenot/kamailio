@@ -47,7 +47,7 @@
           <para>
 			NOTE: At the moment the callcontrol application only supports the old
 			<quote>MI</quote> interface for communication with &kamailio;. This
-			interface is unfortunately not available anymore in &kamailio;. So
+			interface is unfortunately not available any more in &kamailio;. So
 			this application cannot be used right now out of the box together
 			with the call_control module. See the next link for possible
 			solutions:
@@ -410,6 +410,10 @@ route {
         This function can be used from REQUEST_ROUTE.
       </para>
 
+      <note>
+        The <emphasis>dlg_manage()</emphasis> (dialog module) function must be called in the configuration file before using this function.
+      </note>
+
       <example>
       <title>Using the <function>call_control</function> function</title>
         <programlisting format="linespecific">
@@ -424,6 +428,7 @@ if (is_avp_set("$avp(i:805)")) {
 
 if (method==INVITE &amp;&amp; !has_totag() &amp;&amp;
     is_domain_local("$avp(s:billing_party_domain)")) {
+    dlg_manage();
     call_control();
     switch ($retcode) {
     case 2:
@@ -460,4 +465,3 @@ t_relay();
   </section>
 
 </chapter>
-

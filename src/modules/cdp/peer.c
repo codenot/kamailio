@@ -4,7 +4,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -14,7 +14,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -24,6 +24,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,7 +56,7 @@
  * @param port - port of the peer to connect to
  * @returns the new peer* if ok, NULL on error
  */
-peer *new_peer(str fqdn, str realm, int port, str src_addr, str proto)
+peer *new_peer(str fqdn, str realm, int port, str src_addr, str proto, str vrf)
 {
 	peer *x;
 	x = shm_malloc(sizeof(peer));
@@ -71,6 +73,9 @@ peer *new_peer(str fqdn, str realm, int port, str src_addr, str proto)
 		goto error;
 	shm_str_dup_macro(x->src_addr, src_addr);
 	if(!x->src_addr.s)
+		goto error;
+	shm_str_dup_macro(x->vrf, vrf);
+	if(!x->vrf.s)
 		goto error;
 	shm_str_dup_macro(x->proto, proto);
 	x->port = port;
@@ -109,6 +114,8 @@ void free_peer(peer *x, int locked)
 		shm_free(x->realm.s);
 	if(x->src_addr.s)
 		shm_free(x->src_addr.s);
+	if(x->vrf.s)
+		shm_free(x->vrf.s);
 	lock_destroy(x->lock);
 	lock_dealloc((void *)x->lock);
 	shm_free(x);

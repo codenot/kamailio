@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -33,10 +35,19 @@
 
 void compute_md5(char *dst, char *src, int src_len);
 
+void compute_sha1_raw(unsigned char *dst, u_int8_t *src, int src_len);
+
+void compute_sha1(char *dst, u_int8_t *src, int src_len);
+
 void compute_sha256(char *dst, u_int8_t *src, int src_len);
 
 void compute_sha384(char *dst, u_int8_t *src, int src_len);
 
 void compute_sha512(char *dst, u_int8_t *src, int src_len);
+
+int hex_to_bytes(const char *hex_str, unsigned char *bytes, size_t max_bytes);
+
+int bytes_to_hex(const unsigned char *bytes, size_t len, char *hex_str,
+		size_t hex_str_size);
 
 #endif

@@ -697,28 +697,31 @@ int tls_pre_init(void)
 	mf = NULL;
 	rf = NULL;
 	ff = NULL;
+
+	if(ksr_tcp_main_threads == 0) {
 #ifdef TLS_MALLOC_DBG
 #if OPENSSL_VERSION_NUMBER < 0x010100000L
-	if(!CRYPTO_set_mem_ex_functions(ser_malloc, ser_realloc, ser_free)) {
+		if(!CRYPTO_set_mem_ex_functions(ser_malloc, ser_realloc, ser_free)) {
 #else
-	if(!CRYPTO_set_mem_functions(ser_malloc, ser_realloc, ser_free)) {
+		if(!CRYPTO_set_mem_functions(ser_malloc, ser_realloc, ser_free)) {
 #endif
 #else
-	if(!CRYPTO_set_mem_functions(ser_malloc, ser_realloc, ser_free)) {
+		if(!CRYPTO_set_mem_functions(ser_malloc, ser_realloc, ser_free)) {
 #endif
-		LM_ERR("Unable to set the memory allocation functions\n");
-		CRYPTO_get_mem_functions(&mf, &rf, &ff);
-		LM_ERR("libssl current mem functions - m: %p r: %p f: %p\n", mf, rf,
-				ff);
-		LM_ERR("module mem functions - m: %p r: %p f: %p\n", ser_malloc,
-				ser_realloc, ser_free);
-		LM_ERR("Be sure tls module is loaded before any other module using"
-			   " libssl (can be loaded first to be safe)\n");
-		return -1;
-	}
-	LM_DBG("updated memory functions - malloc: %p realloc: %p free: %p\n",
-			ser_malloc, ser_realloc, ser_free);
+			LM_ERR("Unable to set the memory allocation functions\n");
+			CRYPTO_get_mem_functions(&mf, &rf, &ff);
+			LM_ERR("libssl current mem functions - m: %p r: %p f: %p\n", mf, rf,
+					ff);
+			LM_ERR("module mem functions - m: %p r: %p f: %p\n", ser_malloc,
+					ser_realloc, ser_free);
+			LM_ERR("Be sure tls module is loaded before any other module using"
+				   " libssl (can be loaded first to be safe)\n");
+			return -1;
+		}
+		LM_DBG("updated memory functions - malloc: %p realloc: %p free: %p\n",
+				ser_malloc, ser_realloc, ser_free);
 #endif /* LIBRESSL_VERSION_NUMBER */
+	}
 
 	if(tls_init_locks() < 0)
 		return -1;
@@ -741,41 +744,41 @@ int tls_pre_init(void)
  */
 long tls_h_mod_randctx(void *param)
 {
-    do {
-        OSSL_LIB_CTX *osslglobal = NULL;
-        EVP_RAND_CTX *randctx = NULL;
+	do {
+		OSSL_LIB_CTX *osslglobal = NULL;
+		EVP_RAND_CTX *randctx = NULL;
 
-        LM_DBG("enabling locking for rand ctx\n");
+		LM_DBG("enabling locking for rand ctx\n");
 
-        osslglobal = OSSL_LIB_CTX_get0_global_default();
-        if(osslglobal == NULL) {
-            LM_ERR("failed to get lib ssl global ctx\n");
-            return -1L;
-        }
+		osslglobal = OSSL_LIB_CTX_get0_global_default();
+		if(osslglobal == NULL) {
+			LM_ERR("failed to get lib ssl global ctx\n");
+			return -1L;
+		}
 
-        randctx = RAND_get0_primary(osslglobal);
-        if(randctx == NULL) {
-            LM_ERR("primary rand ctx is null\n");
-            return -1L;
-        }
-        EVP_RAND_enable_locking(randctx);
+		randctx = RAND_get0_primary(osslglobal);
+		if(randctx == NULL) {
+			LM_ERR("primary rand ctx is null\n");
+			return -1L;
+		}
+		EVP_RAND_enable_locking(randctx);
 
-        randctx = RAND_get0_public(osslglobal);
-        if(randctx == NULL) {
-            LM_ERR("public rand ctx is null\n");
-            return -1L;
-        }
-        EVP_RAND_enable_locking(randctx);
+		randctx = RAND_get0_public(osslglobal);
+		if(randctx == NULL) {
+			LM_ERR("public rand ctx is null\n");
+			return -1L;
+		}
+		EVP_RAND_enable_locking(randctx);
 
-        randctx = RAND_get0_private(osslglobal);
-        if(randctx == NULL) {
-            LM_ERR("private rand ctx is null\n");
-            return -1L;
-        }
-        EVP_RAND_enable_locking(randctx);
-    } while(0);
+		randctx = RAND_get0_private(osslglobal);
+		if(randctx == NULL) {
+			LM_ERR("private rand ctx is null\n");
+			return -1L;
+		}
+		EVP_RAND_enable_locking(randctx);
+	} while(0);
 
-    return 0L;
+	return 0L;
 }
 #endif /* OPENSSL_VERSION_NUMBER */
 

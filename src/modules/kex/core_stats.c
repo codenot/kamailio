@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -68,17 +70,41 @@ stat_var *rcv_reqs_prack;
 stat_var *rcv_reqs_update;
 stat_var *rcv_reqs_refer;
 stat_var *rcv_reqs_publish;
+stat_var *rcv_reqs_kdmq;
 /*! extended received replies */
 stat_var *rcv_rpls_1xx;
 stat_var *rcv_rpls_18x;
 stat_var *rcv_rpls_2xx;
 stat_var *rcv_rpls_3xx;
 stat_var *rcv_rpls_4xx;
+stat_var *rcv_rpls_400;
 stat_var *rcv_rpls_401;
+stat_var *rcv_rpls_402;
+stat_var *rcv_rpls_403;
 stat_var *rcv_rpls_404;
+stat_var *rcv_rpls_405;
+stat_var *rcv_rpls_406;
 stat_var *rcv_rpls_407;
+stat_var *rcv_rpls_408;
+stat_var *rcv_rpls_409;
+stat_var *rcv_rpls_410;
+stat_var *rcv_rpls_411;
+stat_var *rcv_rpls_413;
+stat_var *rcv_rpls_414;
+stat_var *rcv_rpls_415;
+stat_var *rcv_rpls_420;
 stat_var *rcv_rpls_480;
+stat_var *rcv_rpls_481;
+stat_var *rcv_rpls_482;
+stat_var *rcv_rpls_483;
+stat_var *rcv_rpls_484;
+stat_var *rcv_rpls_485;
 stat_var *rcv_rpls_486;
+stat_var *rcv_rpls_487;
+stat_var *rcv_rpls_488;
+stat_var *rcv_rpls_489;
+stat_var *rcv_rpls_491;
+stat_var *rcv_rpls_493;
 stat_var *rcv_rpls_5xx;
 stat_var *rcv_rpls_6xx;
 
@@ -106,43 +132,84 @@ DECLARE_STAT_VARS(message);
 DECLARE_STAT_VARS(prack);
 DECLARE_STAT_VARS(update);
 DECLARE_STAT_VARS(refer);
+DECLARE_STAT_VARS(options);
 
+/* clang-format off */
 /*! exported core statistics */
-stat_export_t core_stats[] = {{"rcv_requests", 0, &rcv_reqs},
-		{"rcv_requests_invite", 0, &rcv_reqs_invite},
-		{"rcv_requests_cancel", 0, &rcv_reqs_cancel},
-		{"rcv_requests_ack", 0, &rcv_reqs_ack},
-		{"rcv_requests_bye", 0, &rcv_reqs_bye},
-		{"rcv_requests_info", 0, &rcv_reqs_info},
-		{"rcv_requests_register", 0, &rcv_reqs_register},
-		{"rcv_requests_subscribe", 0, &rcv_reqs_subscribe},
-		{"rcv_requests_notify", 0, &rcv_reqs_notify},
-		{"rcv_requests_message", 0, &rcv_reqs_message},
-		{"rcv_requests_options", 0, &rcv_reqs_options},
-		{"rcv_requests_prack", 0, &rcv_reqs_prack},
-		{"rcv_requests_update", 0, &rcv_reqs_update},
-		{"rcv_requests_refer", 0, &rcv_reqs_refer},
-		{"rcv_requests_publish", 0, &rcv_reqs_publish},
-		{"rcv_replies", 0, &rcv_rpls}, {"rcv_replies_1xx", 0, &rcv_rpls_1xx},
-		{"rcv_replies_18x", 0, &rcv_rpls_18x},
-		{"rcv_replies_2xx", 0, &rcv_rpls_2xx},
-		{"rcv_replies_3xx", 0, &rcv_rpls_3xx},
-		{"rcv_replies_4xx", 0, &rcv_rpls_4xx},
-		{"rcv_replies_401", 0, &rcv_rpls_401},
-		{"rcv_replies_404", 0, &rcv_rpls_404},
-		{"rcv_replies_407", 0, &rcv_rpls_407},
-		{"rcv_replies_480", 0, &rcv_rpls_480},
-		{"rcv_replies_486", 0, &rcv_rpls_486},
-		{"rcv_replies_5xx", 0, &rcv_rpls_5xx},
-		{"rcv_replies_6xx", 0, &rcv_rpls_6xx}, {"fwd_requests", 0, &fwd_reqs},
-		{"fwd_replies", 0, &fwd_rpls}, {"drop_requests", 0, &drp_reqs},
-		{"drop_replies", 0, &drp_rpls}, {"err_requests", 0, &err_reqs},
-		{"err_replies", 0, &err_rpls}, {"bad_URIs_rcvd", 0, &bad_URIs},
-		{"unsupported_methods", 0, &unsupported_methods},
-		{"bad_msg_hdr", 0, &bad_msg_hdr}, DECLARE_STATS(invite),
-		DECLARE_STATS(cancel), DECLARE_STATS(bye), DECLARE_STATS(reg),
-		DECLARE_STATS(message), DECLARE_STATS(prack), DECLARE_STATS(update),
-		DECLARE_STATS(refer), {0, 0, 0}};
+stat_export_t core_stats[] = {
+	{"rcv_requests", 0, &rcv_reqs},
+	{"rcv_requests_invite", 0, &rcv_reqs_invite},
+	{"rcv_requests_cancel", 0, &rcv_reqs_cancel},
+	{"rcv_requests_ack", 0, &rcv_reqs_ack},
+	{"rcv_requests_bye", 0, &rcv_reqs_bye},
+	{"rcv_requests_info", 0, &rcv_reqs_info},
+	{"rcv_requests_register", 0, &rcv_reqs_register},
+	{"rcv_requests_subscribe", 0, &rcv_reqs_subscribe},
+	{"rcv_requests_notify", 0, &rcv_reqs_notify},
+	{"rcv_requests_message", 0, &rcv_reqs_message},
+	{"rcv_requests_options", 0, &rcv_reqs_options},
+	{"rcv_requests_prack", 0, &rcv_reqs_prack},
+	{"rcv_requests_update", 0, &rcv_reqs_update},
+	{"rcv_requests_refer", 0, &rcv_reqs_refer},
+	{"rcv_requests_publish", 0, &rcv_reqs_publish},
+	{"rcv_requests_kdmq", 0, &rcv_reqs_kdmq},
+	{"rcv_replies", 0, &rcv_rpls},
+	{"rcv_replies_1xx", 0, &rcv_rpls_1xx},
+	{"rcv_replies_18x", 0, &rcv_rpls_18x},
+	{"rcv_replies_2xx", 0, &rcv_rpls_2xx},
+	{"rcv_replies_3xx", 0, &rcv_rpls_3xx},
+	{"rcv_replies_4xx", 0, &rcv_rpls_4xx},
+	{"rcv_replies_400", 0, &rcv_rpls_400},
+	{"rcv_replies_401", 0, &rcv_rpls_401},
+	{"rcv_replies_402", 0, &rcv_rpls_402},
+	{"rcv_replies_403", 0, &rcv_rpls_403},
+	{"rcv_replies_404", 0, &rcv_rpls_404},
+	{"rcv_replies_405", 0, &rcv_rpls_405},
+	{"rcv_replies_406", 0, &rcv_rpls_406},
+	{"rcv_replies_407", 0, &rcv_rpls_407},
+	{"rcv_replies_408", 0, &rcv_rpls_408},
+	{"rcv_replies_409", 0, &rcv_rpls_409},
+	{"rcv_replies_410", 0, &rcv_rpls_410},
+	{"rcv_replies_411", 0, &rcv_rpls_411},
+	{"rcv_replies_413", 0, &rcv_rpls_413},
+	{"rcv_replies_414", 0, &rcv_rpls_414},
+	{"rcv_replies_415", 0, &rcv_rpls_415},
+	{"rcv_replies_420", 0, &rcv_rpls_420},
+	{"rcv_replies_480", 0, &rcv_rpls_480},
+	{"rcv_replies_481", 0, &rcv_rpls_481},
+	{"rcv_replies_482", 0, &rcv_rpls_482},
+	{"rcv_replies_483", 0, &rcv_rpls_483},
+	{"rcv_replies_484", 0, &rcv_rpls_484},
+	{"rcv_replies_485", 0, &rcv_rpls_485},
+	{"rcv_replies_486", 0, &rcv_rpls_486},
+	{"rcv_replies_487", 0, &rcv_rpls_487},
+	{"rcv_replies_488", 0, &rcv_rpls_488},
+	{"rcv_replies_489", 0, &rcv_rpls_489},
+	{"rcv_replies_491", 0, &rcv_rpls_491},
+	{"rcv_replies_493", 0, &rcv_rpls_493},
+	{"rcv_replies_5xx", 0, &rcv_rpls_5xx},
+	{"rcv_replies_6xx", 0, &rcv_rpls_6xx},
+	{"fwd_requests", 0, &fwd_reqs},
+	{"fwd_replies", 0, &fwd_rpls},
+	{"drop_requests", 0, &drp_reqs},
+	{"drop_replies", 0, &drp_rpls},
+	{"err_requests", 0, &err_reqs},
+	{"err_replies", 0, &err_rpls},
+	{"bad_URIs_rcvd", 0, &bad_URIs},
+	{"unsupported_methods", 0, &unsupported_methods},
+	{"bad_msg_hdr", 0, &bad_msg_hdr},
+	DECLARE_STATS(invite),
+	DECLARE_STATS(cancel),
+	DECLARE_STATS(bye),
+	DECLARE_STATS(reg),
+	DECLARE_STATS(message),
+	DECLARE_STATS(prack),
+	DECLARE_STATS(update),
+	DECLARE_STATS(refer),
+	DECLARE_STATS(options),
+	{0, 0, 0}
+};
+/* clang-format on */
 
 unsigned long shm_stats_get_size(void);
 unsigned long shm_stats_get_used(void);
@@ -151,14 +218,17 @@ unsigned long shm_stats_get_mused(void);
 unsigned long shm_stats_get_free(void);
 unsigned long shm_stats_get_frags(void);
 
+/* clang-format off */
 stat_export_t shm_stats[] = {
-		{"total_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_size},
-		{"used_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_used},
-		{"real_used_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_rused},
-		{"max_used_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_mused},
-		{"free_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_free},
-		{"fragments", STAT_IS_FUNC, (stat_var **)shm_stats_get_frags},
-		{0, 0, 0}};
+	{"total_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_size},
+	{"used_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_used},
+	{"real_used_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_rused},
+	{"max_used_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_mused},
+	{"free_size", STAT_IS_FUNC, (stat_var **)shm_stats_get_free},
+	{"fragments", STAT_IS_FUNC, (stat_var **)shm_stats_get_frags},
+	{0, 0, 0}
+};
+/* clang-format on */
 
 int stats_proc_stats_init_rpc(void);
 
@@ -211,6 +281,9 @@ static int km_cb_req_stats(struct sip_msg *msg, unsigned int flags, void *param)
 		case METHOD_PUBLISH:
 			update_stat(rcv_reqs_publish, 1);
 			break;
+		case METHOD_KDMQ:
+			update_stat(rcv_reqs_kdmq, 1);
+			break;
 		case METHOD_OTHER:
 			update_stat(unsupported_methods, 1);
 			break;
@@ -259,6 +332,9 @@ static int km_cb_rpl_stats_by_method(
 			case METHOD_REFER:
 				update_stat(VAR_NAME(refer)[group], 1);
 				break;
+			case METHOD_OPTIONS:
+				update_stat(VAR_NAME(options)[group], 1);
+				break;
 		}
 	}
 
@@ -285,20 +361,89 @@ static int km_cb_rpl_stats(struct sip_msg *msg, unsigned int flags, void *param)
 			  && msg->first_line.u.reply.statuscode < 500) {
 		update_stat(rcv_rpls_4xx, 1);
 		switch(msg->first_line.u.reply.statuscode) {
+			case 400:
+				update_stat(rcv_rpls_400, 1);
+				break;
 			case 401:
 				update_stat(rcv_rpls_401, 1);
+				break;
+			case 402:
+				update_stat(rcv_rpls_402, 1);
+				break;
+			case 403:
+				update_stat(rcv_rpls_403, 1);
 				break;
 			case 404:
 				update_stat(rcv_rpls_404, 1);
 				break;
+			case 405:
+				update_stat(rcv_rpls_405, 1);
+				break;
+			case 406:
+				update_stat(rcv_rpls_406, 1);
+				break;
 			case 407:
 				update_stat(rcv_rpls_407, 1);
+				break;
+			case 408:
+				update_stat(rcv_rpls_408, 1);
+				break;
+			case 409:
+				update_stat(rcv_rpls_409, 1);
+				break;
+			case 410:
+				update_stat(rcv_rpls_410, 1);
+				break;
+			case 411:
+				update_stat(rcv_rpls_411, 1);
+				break;
+			case 413:
+				update_stat(rcv_rpls_413, 1);
+				break;
+			case 414:
+				update_stat(rcv_rpls_414, 1);
+				break;
+			case 415:
+				update_stat(rcv_rpls_415, 1);
+				break;
+			case 420:
+				update_stat(rcv_rpls_420, 1);
 				break;
 			case 480:
 				update_stat(rcv_rpls_480, 1);
 				break;
+			case 481:
+				update_stat(rcv_rpls_481, 1);
+				break;
+			case 482:
+				update_stat(rcv_rpls_482, 1);
+				break;
+			case 483:
+				update_stat(rcv_rpls_483, 1);
+				break;
+			case 484:
+				update_stat(rcv_rpls_484, 1);
+				break;
+			case 485:
+				update_stat(rcv_rpls_485, 1);
+				break;
 			case 486:
 				update_stat(rcv_rpls_486, 1);
+				break;
+			case 487:
+				update_stat(rcv_rpls_487, 1);
+				break;
+			case 488:
+				update_stat(rcv_rpls_488, 1);
+				break;
+			case 489:
+				update_stat(rcv_rpls_489, 1);
+				break;
+			case 491:
+				update_stat(rcv_rpls_491, 1);
+				break;
+			case 493:
+				update_stat(rcv_rpls_493, 1);
 				break;
 		}
 	} else if(msg->first_line.u.reply.statuscode > 499
@@ -808,21 +953,24 @@ static const char *rpc_stats_reset_statistics_doc[2] = {
 static const char *rpc_stats_clear_statistics_doc[2] = {
 		"clear core and modules stats (verbose operation)", 0};
 
+/* clang-format off */
 /**
  * Stats RPC  commands.
  */
 rpc_export_t kex_stats_rpc[] = {
-		{"stats.get_statistics", rpc_stats_get_statistics,
-				rpc_stats_get_statistics_doc, RET_ARRAY},
-		{"stats.fetch", rpc_stats_fetchs_statistics,
-				rpc_stats_fetchs_statistics_doc, 0},
-		{"stats.fetchn", rpc_stats_fetchn_statistics,
-				rpc_stats_fetchn_statistics_doc, 0},
-		{"stats.reset_statistics", rpc_stats_reset_statistics,
-				rpc_stats_reset_statistics_doc, 0},
-		{"stats.clear_statistics", rpc_stats_clear_statistics,
-				rpc_stats_clear_statistics_doc, 0},
-		{0, 0, 0, 0}};
+	{"stats.get_statistics", rpc_stats_get_statistics,
+			rpc_stats_get_statistics_doc, RET_ARRAY},
+	{"stats.fetch", rpc_stats_fetchs_statistics,
+			rpc_stats_fetchs_statistics_doc, 0},
+	{"stats.fetchn", rpc_stats_fetchn_statistics,
+			rpc_stats_fetchn_statistics_doc, 0},
+	{"stats.reset_statistics", rpc_stats_reset_statistics,
+			rpc_stats_reset_statistics_doc, 0},
+	{"stats.clear_statistics", rpc_stats_clear_statistics,
+			rpc_stats_clear_statistics_doc, 0},
+	{0, 0, 0, 0}
+};
+/* clang-format on */
 
 /**
  * Stats RPC initializer.

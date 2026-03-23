@@ -4,7 +4,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -14,7 +14,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -24,6 +24,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -78,9 +80,8 @@ inline void AAASessionsLock(unsigned int hash)
 	if(hash < sessions_hash_size) {
 		lock_get(sessions[hash].lock);
 	} else {
-		LM_ERR("AAASessionsLock: hash :%d out of range of sessions_hash_size: "
-			   "%d !\n",
-				hash, sessions_hash_size);
+		LM_ERR("hash :%d out of range of sessions_hash_size: %d !\n", hash,
+				sessions_hash_size);
 	}
 }
 
@@ -95,9 +96,8 @@ inline void AAASessionsUnlock(unsigned int hash)
 	if(hash < sessions_hash_size) {
 		lock_release(sessions[hash].lock);
 	} else {
-		LM_ERR("AAASessionsLock: hash :%d out of range of sessions_hash_size: "
-			   "%d !\n",
-				hash, sessions_hash_size);
+		LM_ERR("hash :%d out of range of sessions_hash_size: %d !\n", hash,
+				sessions_hash_size);
 	}
 }
 
@@ -113,7 +113,7 @@ void free_session(cdp_session_t *x)
 		switch(x->type) {
 			case UNKNOWN_SESSION:
 				if(x->u.generic_data) {
-					LM_ERR("free_session(): The session->u.generic_data should "
+					LM_ERR("The session->u.generic_data should "
 						   "be freed and reset before dropping the session!"
 						   "Possible memory leak!\n");
 				}
@@ -125,7 +125,7 @@ void free_session(cdp_session_t *x)
 			case ACCT_CC_CLIENT:
 				break;
 			default:
-				LM_ERR("free_session(): Unknown session type %d!\n", x->type);
+				LM_ERR("Unknown session type %d!\n", x->type);
 		}
 
 		if(x->dest_host.s)
@@ -341,9 +341,8 @@ void del_session(cdp_session_t *x)
 
 	hash = x->hash;
 	if(hash >= sessions_hash_size) {
-		LM_ERR("del_session: x->hash :%d out of range of sessions_hash_size: "
-			   "%d !\n",
-				hash, sessions_hash_size);
+		LM_ERR("x->hash :%d out of range of sessions_hash_size: %d !\n", hash,
+				sessions_hash_size);
 		return;
 	}
 
@@ -384,7 +383,7 @@ static int generate_session_id(str *id, unsigned int end_pad_len)
 	/* get some memory for it */
 	id->s = (char *)shm_malloc(id->len);
 	if(id->s == 0) {
-		LM_ERR("generate_session_id: no more free memory!\n");
+		LM_ERR("no more free memory!\n");
 		goto error;
 	}
 
@@ -428,7 +427,7 @@ void cdp_sessions_log()
 								x->u.auth.generic_data, x->u.auth.class);
 						break;
 					case ACCT_CC_CLIENT:
-						LM_DBG("CCAcct State [%d] Charging Active [%c (%d)s] "
+						LM_DBG("CCAcct State [%d] Charging Active [%c (%ld)s] "
 							   "Reserved Units(valid=%ds) [%d] Generic [%p]\n",
 								x->u.cc_acc.state,
 								(x->u.cc_acc.charging_start_time
@@ -436,11 +435,11 @@ void cdp_sessions_log()
 												   != ACC_CC_ST_DISCON)
 										? 'Y'
 										: 'N',
-								x->u.cc_acc.charging_start_time
-										? (int)((int)time(0)
-												- (int)x->u.cc_acc
+								x->u.cc_acc.charging_start_time ? (
+										time_t)(time(0)
+												- (time_t)x->u.cc_acc
 														  .charging_start_time)
-										: -1,
+																: -1,
 								x->u.cc_acc.reserved_units
 										? (int)((int)x->u.cc_acc
 														  .last_reservation_request_time
@@ -482,7 +481,7 @@ int cdp_sessions_timer(time_t now, void *ptr)
 									x, ACC_CC_EV_SESSION_STALE, 0);
 						}
 						//check reservation timers - again here we are assuming CC-Time applications
-						int last_res_timestamp =
+						time_t last_res_timestamp =
 								x->u.cc_acc.last_reservation_request_time;
 						int res_valid_for =
 								x->u.cc_acc.reserved_units_validity_time;

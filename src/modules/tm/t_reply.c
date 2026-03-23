@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -98,6 +100,8 @@ static int goto_on_reply = 0;
 /* where to go on receipt of reply without transaction context */
 int goto_on_sl_reply = 0;
 extern str on_sl_reply_name;
+extern str tm_event_callback;
+extern int _tm_evlreq_mode;
 
 extern str _tm_event_callback_lres_sent;
 
@@ -361,10 +365,10 @@ static char *build_ack(struct sip_msg *rpl, struct cell *trans, int branch,
 	if(cfg_get(tm, tm_cfg, reparse_invite)) {
 		/* build the ACK from the INVITE which was sent out */
 		return build_local_reparse(
-				trans, branch, ret_len, ACK, ACK_LEN, &to, 0);
+				trans, branch, ret_len, ACK, ACK_LEN, &to, NULL, 0);
 	} else {
 		/* build the ACK from the reveived INVITE */
-		return build_local(trans, branch, ret_len, ACK, ACK_LEN, &to, 0);
+		return build_local(trans, branch, ret_len, ACK, ACK_LEN, &to, NULL, 0);
 	}
 }
 
@@ -548,7 +552,15 @@ static int _reply_light(struct cell *trans, char *buf, unsigned int len,
 	 * the chances for this increase a lot.
 	 */
 	if(unlikely(!trans->uas.response.dst.send_sock)) {
-		LM_ERR("no resolved dst to send reply to\n");
+		if(unlikely(is_local(trans))) {
+			LM_DBG("local transaction reply [code: %u, t-flags: %x"
+				   " buf: %.*s ...]\n",
+					code, trans->flags, (len > 256) ? 256 : len, buf);
+		} else {
+			LM_ERR("no resolved dst to send reply to [code: %u, t-flags: %x"
+				   " buf: %.*s ...]\n",
+					code, trans->flags, (len > 256) ? 256 : len, buf);
+		}
 	} else {
 		if(likely(SEND_PR_BUFFER(rb, buf, len) >= 0)) {
 			if(unlikely(code >= 200 && !is_local(trans)
@@ -1382,11 +1394,21 @@ static enum rps t_should_relay_response(struct cell *Trans, int new_code,
 			Trans->uac[branch].last_received = new_code;
 			*should_relay = branch;
 			return RPS_PUSHED_AFTER_COMPLETION;
-		} else {
-			LM_DBG("final reply already sent\n");
 		}
-		/* except the exception above, too late  messages will be discarded */
-		goto discard;
+		/* Do not discard negative replies for forked REGISTER messages
+		 * if 200 status for initial trasaction already been set.
+		 * In case of REGISTER request is forked to multiple Registrars
+		 * some of registrars may reply with AUTH response later than others.
+		 * Without this code negative replies will be just discarded silently.
+		 * This part lests late negative replies for forked REGISTERs being treated
+		 * the same way negative replies for INVITE requests are treated
+		 * However it won't be propagated to UAC, as transacton status already 200.
+		 */
+		if(!(strncmp(Trans->method.s, "REGISTER", 8) == 0 && new_code >= 300)) {
+			/*Except the exceptions above, too late  messages will be discarded */
+			LM_DBG("final reply already sent\n");
+			goto discard;
+		}
 	}
 
 	/* if final response received at this branch, allow only INVITE 2xx */
@@ -1401,7 +1423,7 @@ static enum rps t_should_relay_response(struct cell *Trans, int new_code,
 		 *  faked a CANCEL on a non-replied branch don't
 		 * report on it either */
 		if((Trans->uac[branch].last_received == 487)
-				|| (Trans->uac[branch].last_received == 408
+				|| (Trans->uac[branch].last_received == _tm_reply_408_code
 						&& new_code == 487)) {
 			LM_DBG("%d came for a %d branch (ignored)\n", new_code,
 					Trans->uac[branch].last_received);
@@ -1999,8 +2021,12 @@ enum rps relay_reply(struct cell *t, struct sip_msg *p_msg, int branch,
 				/* revert the temporary "store" reply above */
 				t->uac[branch].reply = reply_bak;
 			} else {
-				reason.s = error_text(relayed_code);
-				reason.len = strlen(reason.s);
+				if(relayed_code == _tm_reply_408_code) {
+					reason = _tm_reply_408_reason;
+				} else {
+					reason.s = error_text(relayed_code);
+					reason.len = strlen(reason.s);
+				}
 				buf = build_res_buf_from_sip_req(relayed_code, &reason, to_tag,
 						t->uas.request, &res_len, &bm);
 			}
@@ -2364,6 +2390,9 @@ int reply_received(struct sip_msg *p_msg)
 	struct run_act_ctx *bctx;
 	sr_kemi_eng_t *keng = NULL;
 	int ret;
+	int rt, backup_rt;
+	struct sip_msg ack_msg;
+	str evname_lr = str_init("tm:local-request");
 	str evname = str_init("on_sl_reply");
 
 	/* make sure we know the associated transaction ... */
@@ -2446,20 +2475,79 @@ int reply_received(struct sip_msg *p_msg)
 							run_trans_callbacks_off_params(
 									TMCB_REQUEST_SENT, t, &onsend_params);
 						}
+/* trigger tm:local-request event route for negative reply ACK --- */
+#ifdef WITH_EVENT_LOCAL_REQUEST
+						if(_tm_evlreq_mode & TM_EVLREQ_ACK_HBH) {
+							rt = -1;
+							if(tm_event_callback.s == NULL
+									|| tm_event_callback.len <= 0) {
+								rt = route_lookup(&event_rt, evname_lr.s);
+								if(rt < 0 || event_rt.rlist[rt] == NULL) {
+									LM_DBG("tm:local-request not found\n");
+								}
+							} else {
+								keng = sr_kemi_eng_get();
+								if(keng == NULL) {
+									LM_DBG("event callback (%s) set, but no "
+										   "cfg "
+										   "engine\n",
+											tm_event_callback.s);
+								}
+							}
+
+							memset(&ack_msg, 0, sizeof(struct sip_msg));
+
+							if(build_sip_msg_from_buf(&ack_msg, ack, ack_len, 0)
+									< 0) {
+								LM_ERR("failed to build sip msg structure for "
+									   "negative reply ACK event route\n");
+							}
+
+							/* Call event */
+							backup_rt = get_route_type();
+							set_route_type(REQUEST_ROUTE);
+							init_run_actions_ctx(&ctx);
+
+							if(rt >= 0) {
+								LM_DBG("tm:local-request found [%d]\n", rt);
+								run_top_route(event_rt.rlist[rt], &ack_msg, 0);
+							} else {
+								if(keng != NULL) {
+									if(sr_kemi_route(keng, &ack_msg,
+											   EVENT_ROUTE, &tm_event_callback,
+											   &evname_lr)
+											< 0) {
+										LM_ERR("error running event route kemi "
+											   "callback\n");
+									}
+								}
+							}
+							set_route_type(backup_rt);
+							free_sip_msg(&ack_msg);
+						}
+#endif /* WITH_EVENT_LOCAL_REQUEST */
+
+						/* trigger tm:local-request event route for negative reply ACK --- */
 					}
 					shm_free(ack);
 				}
 			} else if(is_local(t) /*&& 200 <= msg_status < 300*/) {
 				ack = build_local_ack(p_msg, t, branch, &ack_len, &lack_dst);
 				if(ack) {
-					if(msg_send(&lack_dst, ack, ack_len) < 0)
+					if(msg_send(&lack_dst, ack, ack_len) < 0) {
 						LM_ERR("error while sending local ACK\n");
-					else if(unlikely(has_tran_tmcbs(t, TMCB_REQUEST_SENT))) {
-						INIT_TMCB_ONSEND_PARAMS(onsend_params, t->uas.request,
-								p_msg, &uac->request, &lack_dst, ack, ack_len,
-								TMCB_LOCAL_F, branch, TYPE_LOCAL_ACK);
-						run_trans_callbacks_off_params(
-								TMCB_REQUEST_SENT, t, &onsend_params);
+					} else {
+						if(unlikely(has_tran_tmcbs(t, TMCB_REQUEST_SENT))) {
+							INIT_TMCB_ONSEND_PARAMS(onsend_params,
+									t->uas.request, p_msg, &uac->request,
+									&lack_dst, ack, ack_len, TMCB_LOCAL_F,
+									branch, TYPE_LOCAL_ACK);
+							run_trans_callbacks_off_params(
+									TMCB_REQUEST_SENT, t, &onsend_params);
+						}
+						if(msg_status >= 200 && msg_status < 300) {
+							uac_evrt_local_ack_sent(p_msg);
+						}
 					}
 				}
 			}
@@ -2472,7 +2560,7 @@ int reply_received(struct sip_msg *p_msg)
 				membar_read(); /* make sure we get the current value of
 								* local_cancel */
 				/* re-transmit if cancel already built */
-				DBG("tm: reply_received: branch CANCEL retransmit\n");
+				DBG("branch CANCEL retransmit\n");
 				if(SEND_BUFFER(&uac->local_cancel) >= 0) {
 					if(unlikely(has_tran_tmcbs(t, TMCB_REQUEST_SENT)))
 						run_trans_callbacks_with_buf(TMCB_REQUEST_SENT,
@@ -2488,8 +2576,8 @@ int reply_received(struct sip_msg *p_msg)
 				LM_DBG("branch CANCEL created\n");
 				if(t->uas.cancel_reas) {
 					/* cancel reason was saved, use it */
-					cancel_branch(
-							t, branch, t->uas.cancel_reas, F_CANCEL_B_FORCE_C);
+					cancel_branch(t, branch, NULL, t->uas.cancel_reas,
+							F_CANCEL_B_FORCE_C);
 				} else {
 					/* note that in this case we do not know the reason,
 					 * we only know it's a final reply (either locally
@@ -2498,8 +2586,8 @@ int reply_received(struct sip_msg *p_msg)
 					cancel_data.reason.cause = (t->uas.status >= 200)
 													   ? t->uas.status
 													   : CANCEL_REAS_UNKNOWN;
-					cancel_branch(
-							t, branch, &cancel_data.reason, F_CANCEL_B_FORCE_C);
+					cancel_branch(t, branch, NULL, &cancel_data.reason,
+							F_CANCEL_B_FORCE_C);
 				}
 			}
 			goto done; /* nothing to do */
@@ -2759,7 +2847,7 @@ int reply_received(struct sip_msg *p_msg)
 #endif
 		restart_rb_fr(&uac->request, t->fr_inv_timeout);
 		uac->request.flags |= F_RB_FR_INV; /* mark fr_inv */
-	}									   /* provisional replies */
+	} /* provisional replies */
 
 done:
 	if(unlikely(replies_locked)) {
@@ -2986,6 +3074,8 @@ void rpc_reply(rpc_t *rpc, void *c)
 {
 	int ret;
 	struct cell *trans;
+	tm_cell_t *orig_t = NULL;
+	int orig_branch;
 	unsigned int hash_index, label, code;
 	str ti, body, headers, tag, reason;
 
@@ -3021,6 +3111,7 @@ void rpc_reply(rpc_t *rpc, void *c)
 	}
 	LM_DBG("hash_index=%u label=%u\n", hash_index, label);
 
+	tm_get_tb(&orig_t, &orig_branch);
 	if(t_lookup_ident(&trans, hash_index, label) < 0) {
 		ERR("Lookup failed\n");
 		rpc->fault(c, 481, "No such transaction");
@@ -3030,6 +3121,7 @@ void rpc_reply(rpc_t *rpc, void *c)
 	/* it's refcounted now, t_reply_with body unrefs for me -- I can
 	 * continue but may not use T anymore  */
 	ret = t_reply_with_body(trans, code, &reason, &body, &headers, &tag);
+	tm_set_tb(orig_t, orig_branch);
 
 	if(ret < 0) {
 		LM_ERR("Reply failed\n");
@@ -3052,6 +3144,8 @@ void rpc_reply_callid(rpc_t *rpc, void *c)
 {
 	int code;
 	tm_cell_t *trans;
+	tm_cell_t *orig_t = NULL;
+	int orig_branch;
 	str reason = {0, 0};
 	str totag = {0, 0};
 	str hdrs = {0, 0};
@@ -3094,6 +3188,7 @@ void rpc_reply_callid(rpc_t *rpc, void *c)
 		return;
 	}
 
+	tm_get_tb(&orig_t, &orig_branch);
 	if(t_lookup_callid(&trans, callid, cseq) < 0) {
 		rpc->fault(c, 404, "Transaction not found");
 		return;
@@ -3102,9 +3197,101 @@ void rpc_reply_callid(rpc_t *rpc, void *c)
 	/* it's refcounted now, t_reply_with body unrefs for me -- I can
 	 * continue but may not use T anymore  */
 	n = t_reply_with_body(trans, code, &reason, &body, &hdrs, &totag);
+	tm_set_tb(orig_t, orig_branch);
 
 	if(n < 0) {
 		rpc->fault(c, 500, "Reply failed");
+		return;
+	}
+}
+
+/*
+ * Syntax:
+ *
+ * ":tm.retransmit_reply:[response file]\n
+ * callid
+ * cseq
+ * \n"
+ */
+void rpc_retransmit_reply_callid(rpc_t *rpc, void *c)
+{
+	int ret;
+	tm_cell_t *trans;
+	tm_cell_t *orig_t = NULL;
+	int orig_branch;
+	str callid = {0, 0};
+	str cseq = {0, 0};
+
+	if(rpc->scan(c, "S", &callid) < 1) {
+		rpc->fault(c, 400, "Call-ID expected");
+		return;
+	}
+
+	if(rpc->scan(c, "S", &cseq) < 1) {
+		rpc->fault(c, 400, "CSeq expected");
+		return;
+	}
+
+	tm_get_tb(&orig_t, &orig_branch);
+	if(t_lookup_callid(&trans, callid, cseq) < 0) {
+		rpc->fault(c, 404, "Transaction not found");
+		return;
+	}
+	/* it is refcounted now */
+	ret = t_retransmit_reply(trans);
+	UNREF(trans);
+	tm_set_tb(orig_t, orig_branch);
+
+	if(ret < 0) {
+		LM_ERR("Reply retransmission failed\n");
+		rpc->fault(c, 500, "Reply retransmission failed");
+		return;
+	}
+}
+
+/*
+ * Syntax:
+ *
+ * ":tm.retransmit_reply:[response file]\n
+ * trans_id\n
+ * \n"
+ */
+void rpc_retransmit_reply(rpc_t *rpc, void *c)
+{
+	int ret;
+	tm_cell_t *trans;
+	tm_cell_t *orig_t = NULL;
+	int orig_branch;
+	unsigned int hash_index, label;
+	str ti;
+
+	if(rpc->scan(c, "S", &ti) < 1) {
+		rpc->fault(c, 400, "Transaction ID expected");
+		return;
+	}
+
+	if(sscanf(ti.s, "%u:%u", &hash_index, &label) != 2) {
+		ERR("Invalid trans_id (%s)\n", ti.s);
+		rpc->fault(c, 400, "Invalid transaction ID");
+		return;
+	}
+	LM_DBG("hash_index=%u label=%u\n", hash_index, label);
+
+	tm_get_tb(&orig_t, &orig_branch);
+	if(t_lookup_ident(&trans, hash_index, label) < 0) {
+		ERR("Lookup failed\n");
+		rpc->fault(c, 481, "No such transaction");
+		return;
+	}
+
+	/* it is refcounted now */
+	ret = t_retransmit_reply(trans);
+	UNREF(trans);
+	tm_set_tb(orig_t, orig_branch);
+
+	if(ret < 0) {
+		LM_ERR("Reply retransmission failed\n");
+		rpc->fault(c, 500, "Reply retransmission failed");
 		return;
 	}
 }

@@ -6,7 +6,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -16,7 +16,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -26,6 +26,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -76,6 +78,29 @@ enum dialog_direction
 	DLG_MOBILE_UNKNOWN = 2
 	/** Unknown 	*/
 };
+
+/* Method of obtaining isc_mark
+First bit -> 0=REQUEST_ROUTE/1=FAILURE_ROUTE 
+Second bit -> 0=Found/1=Missing
+*/
+enum isc_mark_status
+{
+	ISCMARK_FOUND_ROUTE_HEADER =
+			0, /*Request has been received from AS, old ISCMARK found in Route header field*/
+	ISCMARK_FOUND_LUMPS =
+			1, /*Request to AS has been rejected or timed out, old ISCMARK found in lumps*/
+	ISCMARK_MISSING_START_TRIGGERING =
+			2, /*Request has been received without old ISCMARK in Route header field*/
+	ISCMARK_MISSING_START_TRIGGERING_SAR =
+			3 /*SAR/SAA has happened with HSS, due to terminating request (no old ISCMARK)*/
+};
+
+/* ISCMARK Status bits*/
+
+/* ISCMARK is obtained in failure route*/
+#define ISCMARK_FAILURE (1 << 0)
+/* ISCMARK could not be found */
+#define ISCMARK_MISSING (1 << 1)
 
 /* Various constants */
 /** User Not Registered */

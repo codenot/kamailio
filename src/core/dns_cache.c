@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -70,6 +72,7 @@
 #define DNS_SRV_ZERO_W_CHANCE \
 	1000 /* one in a 1000*weight_sum chance for
 										selecting a 0-weight record */
+#define DNS_CACHE_RMDELAY 300
 
 int dns_cache_init = 1; /* if 0, the DNS cache is not initialized at startup */
 static gen_lock_t *dns_hash_lock = 0;
@@ -118,14 +121,24 @@ static atomic_t *dns_servers_up = NULL;
 #endif
 
 
-static const char *dns_str_errors[] = {"no error",
-		"no more records", /* not an error, but and end condition */
-		"unknown error", "internal error", "bad SRV entry",
-		"unresolvable SRV request", "bad A or AAAA entry",
-		"unresolvable A or AAAA request", "invalid ip in A or AAAA record",
-		"blocklisted ip", "name too long ", /* try again with a shorter name */
-		"ip AF mismatch",					/* address family mismatch */
-		"unresolvable NAPTR request", "bug - critical error"};
+/* clang-format off */
+static const char *dns_str_errors[] = {
+	"no error",
+	"no more records", /* not an error, but and end condition */
+	"unknown error",
+	"internal error",
+	"bad SRV entry",
+	"unresolvable SRV request",
+	"bad A or AAAA entry",
+	"unresolvable A or AAAA request",
+	"invalid ip in A or AAAA record",
+	"blocklisted ip",
+	"name too long ", /* try again with a shorter name */
+	"ip AF mismatch", /* address family mismatch */
+	"unresolvable NAPTR request",
+	"bug - critical error"
+};
+/* clang-format on */
 
 
 void dns_set_local_ttl(int ttl)
@@ -160,14 +173,16 @@ inline static void dns_destroy_entry_shm_unsafe(struct dns_hash_entry *e)
 
 
 /* dec. the internal refcnt and if 0 deletes the entry */
-void dns_hash_put(struct dns_hash_entry *e)
+void dns_hash_put_entry(
+		struct dns_hash_entry *e, const char *fpath, unsigned int line)
 {
 	if(e != NULL) {
 		if(atomic_dec_and_test(&e->refcnt)) {
 			/* atomic_sub_long(dns_cache_total_used, e->total_size); */
 			dns_destroy_entry(e);
 		} else if(e->next == NULL && e->prev == NULL) {
-			LM_WARN("unlinked item %p\n", e);
+			LM_INFO("unlinked item %p rc %d (%s:%u)\n", e,
+					atomic_get_int(&e->refcnt), fpath, line);
 		}
 	}
 }
@@ -175,14 +190,15 @@ void dns_hash_put(struct dns_hash_entry *e)
 
 /* same as above but uses dns_destroy_unsafe (assumes shm_lock held -- tm
  *  optimization) */
-void dns_hash_put_shm_unsafe(struct dns_hash_entry *e)
+void dns_hash_put_entry_shm_unsafe(
+		struct dns_hash_entry *e, const char *fpath, unsigned int line)
 {
 	if(e != NULL) {
 		if(atomic_dec_and_test(&e->refcnt)) {
 			/* atomic_sub_long(dns_cache_total_used, e->total_size); */
 			dns_destroy_entry_shm_unsafe(e);
 		} else if(e->next == NULL && e->prev == NULL) {
-			LM_WARN("unlinked item %p\n", e);
+			LM_WARN("unlinked item %p (%s:%u)\n", e, fpath, line);
 		}
 	}
 }
@@ -479,18 +495,25 @@ int init_dns_cache_stats(int iproc_num)
 /* must be called with the DNS_LOCK hold
  * removes an entry from the hash, dec. its refcnt and if not referenced
  * anymore deletes it */
-inline static void _dns_hash_remove(struct dns_hash_entry *e)
+inline static void _dns_hash_remove_entry(
+		struct dns_hash_entry *e, char *fpath, unsigned int line)
 {
 	clist_rm(e, next, prev);
 	e->next = e->prev = 0;
-	debug_lu_lst("_dns_hash_remove: pre rm:", &e->last_used_lst);
+	debug_lu_lst("dns hash remove: pre rm:", &e->last_used_lst);
 	clist_rm(&e->last_used_lst, next, prev);
-	debug_lu_lst("_dns_hash_remove: post rm:", &e->last_used_lst);
+	debug_lu_lst("dns hash remove: post rm:", &e->last_used_lst);
 	e->last_used_lst.next = e->last_used_lst.prev = 0;
 	*dns_cache_mem_used -= e->total_size;
-	dns_hash_put(e);
+	if(atomic_get_int(&e->refcnt) > 1) {
+		LM_DBG("item %p with high refcnt %d (%s:%u)\n", e,
+				atomic_get_int(&e->refcnt), fpath, line);
+	}
+	/* item unlinked - destroy it */
+	dns_destroy_entry(e);
 }
 
+#define _dns_hash_remove(e) _dns_hash_remove_entry(e, __FILE__, __LINE__)
 
 /* non locking  version (the dns hash must _be_ locked externally)
  * returns 0 when not found, or the entry on success (an entry with a
@@ -539,7 +562,20 @@ again:
 				/* automatically remove expired elements */
 				((e->ent_flags & DNS_FLAG_PERMANENT) == 0)
 				&& ((s_ticks_t)(now - e->expire) >= 0)) {
-			_dns_hash_remove(e);
+			if(atomic_get(&e->refcnt) > 1) {
+				if((s_ticks_t)(now - e->expire - S_TO_TICKS(DNS_CACHE_RMDELAY))
+						>= 0) {
+					LM_DBG("delayed removal: %p (%d)\n", e,
+							(int)atomic_get(&e->refcnt));
+					_dns_hash_remove(e);
+				} else {
+					LM_DBG("delaying removal: %p (%d)\n", e,
+							(int)atomic_get(&e->refcnt));
+				}
+			} else {
+				LM_DBG("immediate removal: %p\n", e);
+				_dns_hash_remove(e);
+			}
 		} else if((e->type == type) && (e->name_len == name->len)
 				  && (strncasecmp(e->name, name->s, e->name_len) == 0)) {
 			e->last_used = now;
@@ -610,8 +646,22 @@ inline static int dns_cache_clean(unsigned int no, int expired_only)
 												->last_used_lst);
 		if(((e->ent_flags & DNS_FLAG_PERMANENT) == 0)
 				&& (!expired_only || ((s_ticks_t)(now - e->expire) >= 0))) {
-			_dns_hash_remove(e);
-			deleted++;
+			if(atomic_get(&e->refcnt) > 1) {
+				if((s_ticks_t)(now - e->expire - S_TO_TICKS(DNS_CACHE_RMDELAY))
+						>= 0) {
+					LM_DBG("delayed removal: %p (%d)\n", e,
+							(int)atomic_get(&e->refcnt));
+					_dns_hash_remove(e);
+					deleted++;
+				} else {
+					LM_DBG("delaying removal: %p (%d)\n", e,
+							(int)atomic_get(&e->refcnt));
+				}
+			} else {
+				LM_DBG("immediate removal: %p\n", e);
+				_dns_hash_remove(e);
+				deleted++;
+			}
 		}
 		n++;
 		if(n >= no)
@@ -647,8 +697,22 @@ inline static int dns_cache_free_mem(unsigned int target, int expired_only)
 												->last_used_lst);
 		if(((e->ent_flags & DNS_FLAG_PERMANENT) == 0)
 				&& (!expired_only || ((s_ticks_t)(now - e->expire) >= 0))) {
-			_dns_hash_remove(e);
-			deleted++;
+			if(atomic_get(&e->refcnt) > 1) {
+				if((s_ticks_t)(now - e->expire - S_TO_TICKS(DNS_CACHE_RMDELAY))
+						>= 0) {
+					LM_DBG("delayed removal: %p (%d)\n", e,
+							(int)atomic_get(&e->refcnt));
+					_dns_hash_remove(e);
+					deleted++;
+				} else {
+					LM_DBG("delaying removal: %p (%d)\n", e,
+							(int)atomic_get(&e->refcnt));
+				}
+			} else {
+				LM_DBG("immediate removal: %p\n", e);
+				_dns_hash_remove(e);
+				deleted++;
+			}
 		}
 	}
 	UNLOCK_DNS_HASH();
@@ -1697,7 +1761,7 @@ inline static struct dns_hash_entry *dns_get_related(
 	LM_DBG("(%p (%.*s, %d), %d, *%p) (%d)\n", e, e->name_len, e->name, e->type,
 			type, *records, cname_chain_len);
 	if(l->prev != NULL || l->next != NULL) {
-		LM_WARN("record not alone: %p - type: %d\n", l, (int)l->type);
+		LM_DBG("record not alone: %p - type: %d\n", l, (int)l->type);
 	}
 	clist_init(l, next, prev);
 	if(type == e->type) {
@@ -1906,11 +1970,13 @@ inline static struct dns_hash_entry *dns_cache_do_request(str *name, int type)
 					}
 				}
 				if(add_record) {
-					dns_cache_add_unsafe(r); /* refcnt++ inside */
-					if(atomic_get(&r->refcnt) == 0) {
-						/* if cache adding failed and nobody else is interested
-						 * destroy this entry */
-						dns_destroy_entry(r);
+					if(dns_cache_add_unsafe(r) < 0) {
+						/* refcnt++ inside */
+						if(atomic_get(&r->refcnt) <= 0) {
+							/* if cache adding failed and nobody else is interested
+							 * destroy this entry */
+							dns_destroy_entry(r);
+						}
 					}
 					if(old) {
 						_dns_hash_remove(old);
@@ -2012,11 +2078,13 @@ inline static struct dns_hash_entry *dns_cache_do_request(str *name, int type)
 				}
 			}
 			if(add_record) {
-				dns_cache_add_unsafe(r); /* refcnt++ inside */
-				if(atomic_get(&r->refcnt) == 0) {
-					/* if cache adding failed and nobody else is interested
-					 * destroy this entry */
-					dns_destroy_entry(r);
+				if(dns_cache_add_unsafe(r) < 0) {
+					/* refcnt++ inside */
+					if(atomic_get(&r->refcnt) <= 0) {
+						/* if cache adding failed and nobody else is interested
+						 * destroy this entry */
+						dns_destroy_entry(r);
+					}
 				}
 				if(old) {
 					_dns_hash_remove(old);
@@ -2044,7 +2112,7 @@ inline static struct dns_hash_entry *dns_cache_do_request(str *name, int type)
 #endif
 end:
 	if(e != NULL && e->prev == NULL && e->next == NULL) {
-		LM_WARN("record not linked: %p - type: %d\n", e, (int)e->type);
+		LM_DBG("record not linked: %p - type: %d\n", e, (int)e->type);
 	}
 	return e;
 }
@@ -3362,7 +3430,7 @@ inline static int dns_naptr_sip_resolve(struct dns_srv_handle *h, str *name,
 		}
 		return -E_DNS_NO_NAPTR;
 	}
-	if(((h->srv == 0) && (h->a == 0)) && /* first call */
+	if(((h->srv == 0) && (h->a == 0) && (h->naptr == 0)) && /* first call */
 			proto && port && (*proto == 0) && (*port == 0)) {
 		*proto = PROTO_UDP; /* just in case we don't find another */
 
@@ -3379,13 +3447,19 @@ inline static int dns_naptr_sip_resolve(struct dns_srv_handle *h, str *name,
 			*port = h->port;
 			return 0;
 		}
+
+		/* do naptr lookup */
+		if((e = dns_get_entry(name, T_NAPTR)) == 0)
+			goto naptr_not_found;
+		h->naptr = e;
 		try_lookup_naptr = 1;
+	} else {
+		/* access old naptr lookup */
+		if((e = h->naptr) == 0)
+			goto naptr_not_found;
 	}
 	/* check if it's an ip address, dns_srv_sip_resolve will return the right failure */
 	if(str2ip(name) || str2ip6(name))
-		goto naptr_not_found;
-	/* do naptr lookup */
-	if((e = dns_get_entry(name, T_NAPTR)) == 0)
 		goto naptr_not_found;
 
 	if(!try_lookup_naptr) {
@@ -3407,7 +3481,7 @@ inline static int dns_naptr_sip_resolve(struct dns_srv_handle *h, str *name,
 		naptr_iterate_init(&tried_bmp);
 		while(dns_naptr_sip_iterate(
 				e->rr_lst, &tried_bmp, &srv_name, &n_proto)) {
-			dns_srv_handle_init(h); /* make sure h does not contain garbage
+			dns_srv_handle_reset(h); /* make sure h does not contain garbage
 									from previous dns_srv_sip_resolve calls */
 			if((ret = dns_srv_resolve_ip(h, &srv_name, ip, port, flags)) >= 0) {
 				LM_DBG("(%.*s, %d, %d), srv0, ret=%d\n", name->len, name->s,
@@ -3896,6 +3970,15 @@ int dns_cache_print_entry(rpc_t *rpc, void *ctx, struct dns_hash_entry *e)
 					rpc->fault(ctx, 500, "Internal error adding naptr order");
 					return -1;
 				}
+				if(rpc->struct_add(sh, "s", "rr_skip_record",
+						   ((struct naptr_rdata *)(rr->rdata))->skip_record
+								   ? "yes"
+								   : "no")
+						< 0) {
+					rpc->fault(ctx, 500,
+							"Internal error adding naptr rr_skip_record");
+					return -1;
+				}
 				s.s = ((struct naptr_rdata *)(rr->rdata))->flags;
 				s.len = ((struct naptr_rdata *)(rr->rdata))->flags_len;
 				if(rpc->struct_add(sh, "S", "rr_flags", &s) < 0) {
@@ -3919,7 +4002,7 @@ int dns_cache_print_entry(rpc_t *rpc, void *ctx, struct dns_hash_entry *e)
 				}
 				s.s = ((struct naptr_rdata *)(rr->rdata))->repl;
 				s.len = ((struct naptr_rdata *)(rr->rdata))->repl_len;
-				if(rpc->struct_add(sh, "S", "rr_regexp", &s) < 0) {
+				if(rpc->struct_add(sh, "S", "rr_replacement", &s) < 0) {
 					rpc->fault(ctx, 500,
 							"Internal error adding naptre rr_replacement");
 					return -1;

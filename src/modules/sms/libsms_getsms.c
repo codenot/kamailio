@@ -101,12 +101,7 @@ static int pdu2ascii(char *pdu, char *ascii)
 			bitposition++;
 			c = (c >> 1) & 127; /* The shift fills with 1, but I want 0 */
 		}
-		if(/*cs_convert*/ 1)
-			ascii[charcounter] = sms2ascii(c);
-		else if(c == 0)
-			ascii[charcounter] = 183;
-		else
-			ascii[charcounter] = c;
+		ascii[charcounter] = sms2ascii(c);
 	}
 	ascii[count] = 0;
 	return count;
@@ -192,9 +187,9 @@ static int fetchsms(struct modem *mdm, int sim, char *pdu)
 		memcpy(pdu, beginning, clen);
 		pdu[clen] = '\0';
 	} else {
-		/* truncate */
-		memcpy(pdu, beginning, SMS_BUF_SIZE - 1);
-		pdu[SMS_BUF_SIZE - 1] = '\0';
+		/* unsuppported length */
+		LM_ERR("failed storing message for sim %i (len: %d)\n", sim, clen);
+		return 0;
 	}
 
 	return sim;
@@ -253,7 +248,7 @@ int check_memory(struct modem *mdm, int flag)
 					}
 				}
 			} /* if(strstr) */
-		}	  /* if(put_command) */
+		} /* if(put_command) */
 		/* if we are here ->  some error happened */
 		if(checkmodem(mdm) != 0) {
 			LM_WARN("something happened with the modem -> was reinit -> let's "
@@ -437,6 +432,10 @@ static int splitpdu(struct modem *mdm, char *pdu, struct incame_sms *sms)
 		start += 3;
 		end = strstr(start, "\",");
 		if(end != 0) {
+			if(end - start >= SMS_NAME_LEN) {
+				/* too long */
+				return -1;
+			}
 			memcpy(sms->name, start, end - start);
 			sms->name[end - start] = 0;
 		} else {

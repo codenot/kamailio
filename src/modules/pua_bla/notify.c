@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -206,7 +208,6 @@ int bla_handle_notify(struct sip_msg *msg, char *s1, char *s2)
 	}
 
 	xmlCleanupParser();
-	xmlMemoryDump();
 
 	free_to_params(&TO);
 	return 1;

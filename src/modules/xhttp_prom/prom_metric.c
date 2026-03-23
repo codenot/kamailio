@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -118,6 +120,7 @@ struct prom_metric_s
 {
 	metric_type_t type;		   /**< Metric type. */
 	str name;				   /**< Name of the metric. */
+	str help;				   /**< Help metadata string for the metric. */
 	struct prom_lb_s *lb_name; /**< Names of labels. */
 	struct prom_buckets_upper_s
 			*buckets_upper; /**< Upper bounds for buckets. */
@@ -289,6 +292,10 @@ static void prom_counter_free(prom_metric_t *m_cnt)
 	assert(m_cnt);
 
 	assert(m_cnt->type == M_COUNTER);
+
+	if(m_cnt->help.s) {
+		shm_free(m_cnt->help.s);
+	}
 
 	if(m_cnt->name.s) {
 		shm_free(m_cnt->name.s);
@@ -1015,6 +1022,15 @@ int prom_counter_create(char *spec)
 			}
 			LM_DBG("name = %.*s\n", m_cnt->name.len, m_cnt->name.s);
 
+		} else if(p->name.len == 4 && strncmp(p->name.s, "help", 4) == 0) {
+			/* Fill counter help metadata. */
+			if(shm_str_dup(&m_cnt->help, &p->body)) {
+				LM_ERR("Error creating counter help: %.*s\n", p->body.len,
+						p->body.s);
+				goto error;
+			}
+			LM_DBG("help = %.*s\n", m_cnt->help.len, m_cnt->help.s);
+
 		} else {
 			LM_ERR("Unknown field: %.*s (%.*s)\n", p->name.len, p->name.s,
 					p->body.len, p->body.s);
@@ -1056,6 +1072,10 @@ static void prom_gauge_free(prom_metric_t *m_gg)
 	assert(m_gg);
 
 	assert(m_gg->type == M_GAUGE);
+
+	if(m_gg->help.s) {
+		shm_free(m_gg->help.s);
+	}
 
 	if(m_gg->name.s) {
 		shm_free(m_gg->name.s);
@@ -1112,6 +1132,15 @@ int prom_gauge_create(char *spec)
 				goto error;
 			}
 			LM_DBG("name = %.*s\n", m_gg->name.len, m_gg->name.s);
+
+		} else if(p->name.len == 4 && strncmp(p->name.s, "help", 4) == 0) {
+			/* Fill gauge help metadata. */
+			if(shm_str_dup(&m_gg->help, &p->body)) {
+				LM_ERR("Error creating gauge help: %.*s\n", p->body.len,
+						p->body.s);
+				goto error;
+			}
+			LM_DBG("help = %.*s\n", m_gg->help.len, m_gg->help.s);
 
 		} else {
 			LM_ERR("Unknown field: %.*s (%.*s)\n", p->name.len, p->name.s,
@@ -1187,6 +1216,29 @@ int prom_counter_reset(str *s_name, str *l1, str *l2, str *l3)
 
 	/* Reset counter value. */
 	p->m.cval = 0;
+
+	lock_release(prom_lock);
+	return 0;
+}
+
+/**
+ * @brief Increase (or decrease, if amount is negative) a gauge by the given amount.
+ */
+int prom_gauge_inc(str *s_name, double number, str *l1, str *l2, str *l3)
+{
+	lock_get(prom_lock);
+
+	/* Find a lvalue based on its metric name and labels. */
+	prom_lvalue_t *p = NULL;
+	p = prom_metric_lvalue_get(s_name, M_GAUGE, l1, l2, l3);
+	if(!p) {
+		LM_ERR("Cannot find gauge: %.*s\n", s_name->len, s_name->s);
+		lock_release(prom_lock);
+		return -1;
+	}
+
+	/* Increase/decrease gauge value. */
+	p->m.gval += number;
 
 	lock_release(prom_lock);
 	return 0;
@@ -1393,6 +1445,10 @@ static void prom_histogram_free(prom_metric_t *m_hist)
 
 	assert(m_hist->type == M_HISTOGRAM);
 
+	if(m_hist->help.s) {
+		shm_free(m_hist->help.s);
+	}
+
 	if(m_hist->name.s) {
 		shm_free(m_hist->name.s);
 	}
@@ -1467,6 +1523,15 @@ int prom_histogram_create(char *spec)
 				goto error;
 			}
 			LM_DBG("buckets = %.*s\n", p->body.len, p->body.s);
+
+		} else if(p->name.len == 4 && strncmp(p->name.s, "help", 4) == 0) {
+			/* Fill histogram help metadata. */
+			if(shm_str_dup(&m_hist->help, &p->body)) {
+				LM_ERR("Error creating histogram help: %.*s\n", p->body.len,
+						p->body.s);
+				goto error;
+			}
+			LM_DBG("help = %.*s\n", m_hist->help.len, m_hist->help.s);
 
 		} else {
 			LM_ERR("Unknown field: %.*s (%.*s)\n", p->name.len, p->name.s,
@@ -1670,13 +1735,12 @@ static int prom_label_print(
 		goto error;
 	}
 
-	if(plval->n_elem == 0) {
-		/* Nothing to print. */
-		return 0;
-	}
-
-	if(!lb_name || lb_name->n_elem == 0) {
-		/* Nothing to print. */
+	if(plval->n_elem == 0 || !lb_name || lb_name->n_elem == 0) {
+		/* No metric-specific labels, but print global tags if present. */
+		if(prom_body_printf(ctx, "%s", xhttp_prom_tags_braces) == -1) {
+			LM_ERR("Fail to print\n");
+			goto error;
+		}
 		return 0;
 	}
 
@@ -1708,8 +1772,8 @@ static int prom_label_print(
 		plval_node = plval_node->next;
 	} /* while (lb_name_node && plval_node) */
 
-	/* Close labels. */
-	if(prom_body_printf(ctx, "}") == -1) {
+	/* Append global tags and close labels. */
+	if(prom_body_printf(ctx, "%s}", xhttp_prom_tags_comma) == -1) {
 		LM_ERR("Fail to print\n");
 		goto error;
 	}
@@ -1767,8 +1831,8 @@ static int prom_label_print_le(
 		goto error;
 	}
 
-	/* Close labels. */
-	if(prom_body_printf(ctx, "}") == -1) {
+	/* Append global tags and close labels. */
+	if(prom_body_printf(ctx, "%s}", xhttp_prom_tags_comma) == -1) {
 		LM_ERR("Fail to print\n");
 		goto error;
 	}
@@ -1822,10 +1886,44 @@ static int prom_metric_lvalue_print(
 			goto error;
 		}
 
-		/* Print labels */
-		if(prom_label_print(ctx, p->lb_name, &pvl->lval)) {
-			LM_ERR("Fail to print labels\n");
-			goto error;
+
+		/* Print labels and append global tags if set */
+		int has_labels =
+				(p->lb_name && p->lb_name->n_elem > 0 && pvl->lval.n_elem > 0);
+		int has_tags =
+				(xhttp_prom_tags_comma && xhttp_prom_tags_comma[0] != '\0');
+		if(has_labels) {
+			/* Print user labels, then append global tags if set */
+			/* Remove closing brace, append comma, then tags, then close */
+			if(prom_body_printf(ctx, "{") == -1)
+				goto error;
+			prom_lb_node_t *lb_name_node = p->lb_name->lb;
+			prom_lb_node_t *plval_node = pvl->lval.lb;
+			int first = 1;
+			while(lb_name_node && plval_node) {
+				if(!first) {
+					if(prom_body_printf(ctx, ", ") == -1)
+						goto error;
+				}
+				if(prom_body_printf(ctx, "%.*s=\"%.*s\"", lb_name_node->n.len,
+						   lb_name_node->n.s, plval_node->n.len,
+						   plval_node->n.s)
+						== -1)
+					goto error;
+				lb_name_node = lb_name_node->next;
+				plval_node = plval_node->next;
+				first = 0;
+			}
+			if(has_tags) {
+				if(prom_body_printf(ctx, "%s", xhttp_prom_tags_comma) == -1)
+					goto error;
+			}
+			if(prom_body_printf(ctx, "}") == -1)
+				goto error;
+		} else if(has_tags) {
+			/* Only global tags */
+			if(prom_body_printf(ctx, "{%s}", xhttp_prom_tags) == -1)
+				goto error;
 		}
 
 		if(prom_body_printf(ctx, " %" PRIu64, pvl->m.cval) == -1) {
@@ -1833,7 +1931,12 @@ static int prom_metric_lvalue_print(
 			goto error;
 		}
 
-		if(prom_body_printf(ctx, " %" PRIu64 "\n", ts) == -1) {
+		if(prom_body_timestamp_printf(ctx, ts) == -1) {
+			LM_ERR("Fail to print\n");
+			goto error;
+		}
+
+		if(prom_body_printf(ctx, "\n") == -1) {
 			LM_ERR("Fail to print\n");
 			goto error;
 		}
@@ -1865,7 +1968,12 @@ static int prom_metric_lvalue_print(
 			goto error;
 		}
 
-		if(prom_body_printf(ctx, " %" PRIu64 "\n", ts) == -1) {
+		if(prom_body_timestamp_printf(ctx, ts) == -1) {
+			LM_ERR("Fail to print\n");
+			goto error;
+		}
+
+		if(prom_body_printf(ctx, "\n") == -1) {
 			LM_ERR("Fail to print\n");
 			goto error;
 		}
@@ -1908,7 +2016,12 @@ static int prom_metric_lvalue_print(
 				goto error;
 			}
 
-			if(prom_body_printf(ctx, " %" PRIu64 "\n", ts) == -1) {
+			if(prom_body_timestamp_printf(ctx, ts) == -1) {
+				LM_ERR("Fail to print\n");
+				goto error;
+			}
+
+			if(prom_body_printf(ctx, "\n") == -1) {
 				LM_ERR("Fail to print\n");
 				goto error;
 			}
@@ -1934,7 +2047,12 @@ static int prom_metric_lvalue_print(
 			goto error;
 		}
 
-		if(prom_body_printf(ctx, " %" PRIu64 "\n", ts) == -1) {
+		if(prom_body_timestamp_printf(ctx, ts) == -1) {
+			LM_ERR("Fail to print\n");
+			goto error;
+		}
+
+		if(prom_body_printf(ctx, "\n") == -1) {
 			LM_ERR("Fail to print\n");
 			goto error;
 		}
@@ -1958,7 +2076,12 @@ static int prom_metric_lvalue_print(
 			goto error;
 		}
 
-		if(prom_body_printf(ctx, " %" PRIu64 "\n", ts) == -1) {
+		if(prom_body_timestamp_printf(ctx, ts) == -1) {
+			LM_ERR("Fail to print\n");
+			goto error;
+		}
+
+		if(prom_body_printf(ctx, "\n") == -1) {
 			LM_ERR("Fail to print\n");
 			goto error;
 		}
@@ -1982,7 +2105,12 @@ static int prom_metric_lvalue_print(
 			goto error;
 		}
 
-		if(prom_body_printf(ctx, " %" PRIu64 "\n", ts) == -1) {
+		if(prom_body_timestamp_printf(ctx, ts) == -1) {
+			LM_ERR("Fail to print\n");
+			goto error;
+		}
+
+		if(prom_body_printf(ctx, "\n") == -1) {
 			LM_ERR("Fail to print\n");
 			goto error;
 		}
@@ -1996,6 +2124,50 @@ static int prom_metric_lvalue_print(
 
 error:
 	return -1;
+}
+
+static int prom_metric_metadata_print(
+		prom_ctx_t *ctx, prom_metric_t *p, int flags)
+{
+	if(!ctx) {
+		LM_ERR("No context\n");
+		return -1;
+	}
+
+	if(!p) {
+		LM_ERR("No metric\n");
+		return -1;
+	}
+
+	if((flags & METADATA_FLAGS_HELP) && STR_WITHVAL(&p->help)) {
+		if(prom_body_printf(ctx, "# HELP %.*s%.*s %.*s\n",
+				   xhttp_prom_beginning.len, xhttp_prom_beginning.s,
+				   p->name.len, p->name.s, p->help.len, p->help.s)
+				== -1) {
+			LM_ERR("Fail to print\n");
+			return -1;
+		}
+	}
+
+	if(flags & METADATA_FLAGS_TYPE) {
+		const char *type_descr = (p->type == M_COUNTER)		? "counter"
+								 : (p->type == M_GAUGE)		? "gauge"
+								 : (p->type == M_HISTOGRAM) ? "histogram"
+															: NULL;
+		if(type_descr) {
+			if(prom_body_printf(ctx, "# TYPE %.*s%.*s %s\n",
+					   xhttp_prom_beginning.len, xhttp_prom_beginning.s,
+					   p->name.len, p->name.s, type_descr)
+					== -1) {
+				LM_ERR("Fail to print\n");
+				return -1;
+			}
+		} else {
+			LM_DBG("Unknown metric type: %d\n", p->type);
+		}
+	}
+
+	return 0;
 }
 
 /**
@@ -2023,6 +2195,13 @@ int prom_metric_list_print(prom_ctx_t *ctx)
 	while(p) {
 
 		prom_lvalue_t *pvl = p->lval_list;
+
+		if(metadata_flags) {
+			if(prom_metric_metadata_print(ctx, p, metadata_flags)) {
+				LM_ERR("Failed to print metric metadata\n");
+				goto error;
+			}
+		}
 
 		while(pvl) {
 			if(prom_metric_lvalue_print(ctx, p, pvl)) {

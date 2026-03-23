@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -68,6 +70,7 @@
 #include "../../modules/tm/tm_load.h"
 #include "../../core/rpc_lookup.h"
 #include "../../core/srapi.h"
+#include "../../core/events.h"
 #include "../rr/api.h"
 #include "dlg_hash.h"
 #include "dlg_timer.h"
@@ -94,7 +97,6 @@ static void mod_destroy(void);
 /* module parameter */
 static int dlg_hash_size = 4096;
 static char *rr_param = "did";
-static int dlg_flag = -1;
 static str timeout_spec = {NULL, 0};
 static int default_timeout = 60 * 60 * 12; /* 12 hours */
 static int seq_match_mode = SEQ_MATCH_STRICT_ID;
@@ -157,6 +159,7 @@ int dlg_ka_timer = 0;
 int dlg_ka_interval = 0;
 int dlg_clean_timer = 90;
 int dlg_ctxiuid_mode = 0;
+int dlg_process_mode = 0;
 
 str dlg_lreq_callee_headers = {0};
 
@@ -187,6 +190,8 @@ static int w_dlg_reset_property(struct sip_msg *msg, char *prop, char *s2);
 static int w_dlg_manage(struct sip_msg *, char *, char *);
 static int w_dlg_bye(struct sip_msg *, char *, char *);
 static int w_dlg_refer(struct sip_msg *, char *, char *);
+static int w_dlg_refer_did(sip_msg_t *, char *, char *, char *, char *);
+static int w_dlg_refer_cid(sip_msg_t *, char *, char *, char *);
 static int w_dlg_bridge(struct sip_msg *, char *, char *, char *);
 static int w_dlg_set_timeout(struct sip_msg *, char *, char *, char *);
 static int w_dlg_set_timeout_by_profile2(struct sip_msg *, char *, char *);
@@ -218,16 +223,24 @@ static int w_dlg_req_with_content(
 		struct sip_msg *, char *, char *, char *, char *);
 static int w_dlg_req_with_headers(struct sip_msg *, char *, char *, char *);
 static int w_dlg_req_within(struct sip_msg *, char *, char *);
+static int w_dlg_set_state(sip_msg_t *, char *, char *);
+static int w_dlg_update_state(sip_msg_t *, char *, char *);
 
 static int fixup_dlg_dlg_req_within(void **, int);
 static int fixup_dlg_req_with_headers(void **, int);
 static int fixup_dlg_req_with_content(void **, int);
 static int fixup_dlg_req_with_headers_and_content(void **, int);
 
+static int dlg_sip_reply_out(sr_event_param_t *evp);
+
 /* clang-format off */
 static cmd_export_t cmds[]={
 	{"dlg_manage", (cmd_function)w_dlg_manage,            0,0,
 			0, REQUEST_ROUTE },
+	{"dlg_set_state", (cmd_function)w_dlg_set_state,      1,fixup_spve_null,
+			fixup_free_spve_null, ANY_ROUTE },
+	{"dlg_update_state", (cmd_function)w_dlg_update_state, 0,0,
+			0, REQUEST_ROUTE| FAILURE_ROUTE | ONREPLY_ROUTE | BRANCH_ROUTE },
 	{"set_dlg_profile", (cmd_function)w_set_dlg_profile,  1,fixup_profile,
 			0, ANY_ROUTE },
 	{"set_dlg_profile", (cmd_function)w_set_dlg_profile,  2,fixup_profile,
@@ -254,6 +267,10 @@ static cmd_export_t cmds[]={
 			0, ANY_ROUTE },
 	{"dlg_refer",(cmd_function)w_dlg_refer,               2,fixup_dlg_refer,
 			0, ANY_ROUTE },
+	{"dlg_refer_did",(cmd_function)w_dlg_refer_did,       4,fixup_iiss,
+			fixup_free_iiss, ANY_ROUTE },
+	{"dlg_refer_cid",(cmd_function)w_dlg_refer_cid,       3,fixup_spve_all,
+			fixup_free_spve_all, ANY_ROUTE },
 	{"dlg_bridge",(cmd_function)w_dlg_bridge,             3,fixup_dlg_bridge,
 			0, ANY_ROUTE },
 	{"dlg_get",(cmd_function)w_dlg_get,                   3,fixup_dlg_bridge,
@@ -300,17 +317,16 @@ static cmd_export_t cmds[]={
 };
 
 static param_export_t mod_params[]={
-	{ "enable_stats",          INT_PARAM, &dlg_enable_stats         },
-	{ "hash_size",             INT_PARAM, &dlg_hash_size            },
+	{ "enable_stats",          PARAM_INT, &dlg_enable_stats         },
+	{ "hash_size",             PARAM_INT, &dlg_hash_size            },
 	{ "rr_param",              PARAM_STRING, &rr_param                 },
-	{ "dlg_flag",              INT_PARAM, &dlg_flag                 },
 	{ "timeout_avp",           PARAM_STR, &timeout_spec           },
-	{ "default_timeout",       INT_PARAM, &default_timeout          },
+	{ "default_timeout",       PARAM_INT, &default_timeout          },
 	{ "dlg_extra_hdrs",        PARAM_STR, &dlg_extra_hdrs         },
-	{ "dlg_match_mode",        INT_PARAM, &seq_match_mode           },
-	{ "detect_spirals",        INT_PARAM, &detect_spirals,          },
+	{ "dlg_match_mode",        PARAM_INT, &seq_match_mode           },
+	{ "detect_spirals",        PARAM_INT, &detect_spirals,          },
 	{ "db_url",                PARAM_STR, &db_url                 },
-	{ "db_mode",               INT_PARAM, &dlg_db_mode_param        },
+	{ "db_mode",               PARAM_INT, &dlg_db_mode_param        },
 	{ "table_name",            PARAM_STR, &dialog_table_name        },
 	{ "call_id_column",        PARAM_STR, &call_id_column         },
 	{ "from_uri_column",       PARAM_STR, &from_uri_column        },
@@ -339,38 +355,39 @@ static param_export_t mod_params[]={
 	{ "vars_key_column",       PARAM_STR, &vars_key_column        },
 	{ "vars_value_column",     PARAM_STR, &vars_value_column      },
 
-	{ "db_update_period",      INT_PARAM, &db_update_period         },
-	{ "db_fetch_rows",         INT_PARAM, &db_fetch_rows            },
+	{ "db_update_period",      PARAM_INT, &db_update_period         },
+	{ "db_fetch_rows",         PARAM_INT, &db_fetch_rows            },
 	{ "profiles_with_value",   PARAM_STRING, &profiles_wv_s            },
 	{ "profiles_no_value",     PARAM_STRING, &profiles_nv_s            },
 	{ "bridge_controller",     PARAM_STR, &dlg_bridge_controller  },
 	{ "bridge_contact",        PARAM_STR, &dlg_bridge_contact       },
 	{ "ruri_pvar",             PARAM_STR, &ruri_pvar_param        },
-	{ "initial_cbs_inscript",  INT_PARAM, &initial_cbs_inscript     },
-	{ "send_bye",              INT_PARAM, &dlg_send_bye             },
-	{ "wait_ack",              INT_PARAM, &dlg_wait_ack             },
+	{ "initial_cbs_inscript",  PARAM_INT, &initial_cbs_inscript     },
+	{ "send_bye",              PARAM_INT, &dlg_send_bye             },
+	{ "wait_ack",              PARAM_INT, &dlg_wait_ack             },
 	{ "xavp_cfg",              PARAM_STR, &dlg_xavp_cfg           },
-	{ "ka_timer",              INT_PARAM, &dlg_ka_timer             },
-	{ "ka_interval",           INT_PARAM, &dlg_ka_interval          },
-	{ "timeout_noreset",       INT_PARAM, &dlg_timeout_noreset      },
+	{ "ka_timer",              PARAM_INT, &dlg_ka_timer             },
+	{ "ka_interval",           PARAM_INT, &dlg_ka_interval          },
+	{ "timeout_noreset",       PARAM_INT, &dlg_timeout_noreset      },
 	{ "timer_procs",           PARAM_INT, &dlg_timer_procs          },
 	{ "track_cseq_updates",    PARAM_INT, &_dlg_track_cseq_updates  },
 	{ "lreq_callee_headers",   PARAM_STR, &dlg_lreq_callee_headers  },
-	{ "db_skip_load",          INT_PARAM, &db_skip_load             },
-	{ "ka_failed_limit",       INT_PARAM, &dlg_ka_failed_limit      },
-	{ "enable_dmq",            INT_PARAM, &dlg_enable_dmq           },
+	{ "db_skip_load",          PARAM_INT, &db_skip_load             },
+	{ "ka_failed_limit",       PARAM_INT, &dlg_ka_failed_limit      },
+	{ "enable_dmq",            PARAM_INT, &dlg_enable_dmq           },
 	{ "event_callback",        PARAM_STR, &dlg_event_callback       },
 	{ "early_timeout",         PARAM_INT, &dlg_early_timeout        },
 	{ "noack_timeout",         PARAM_INT, &dlg_noack_timeout        },
 	{ "end_timeout",           PARAM_INT, &dlg_end_timeout          },
 	{ "h_id_start",            PARAM_INT, &dlg_h_id_start           },
 	{ "h_id_step",             PARAM_INT, &dlg_h_id_step            },
-	{ "keep_proxy_rr",         INT_PARAM, &dlg_keep_proxy_rr        },
-	{ "dlg_filter_mode",       INT_PARAM, &dlg_filter_mode          },
+	{ "keep_proxy_rr",         PARAM_INT, &dlg_keep_proxy_rr        },
+	{ "dlg_filter_mode",       PARAM_INT, &dlg_filter_mode          },
 	{ "bye_early_code",        PARAM_INT, &bye_early_code           },
 	{ "bye_early_reason",      PARAM_STR, &bye_early_reason         },
 	{ "dlg_ctxiuid_mode",      PARAM_INT, &dlg_ctxiuid_mode         },
 	{ "debug_variables",       PARAM_INT, &debug_variables_list     },
+	{ "dlg_mode",              PARAM_INT, &dlg_process_mode         },
 
 	{ 0,0,0 }
 };
@@ -550,8 +567,7 @@ static int mod_init(void)
 
 #ifdef STATISTICS
 	/* register statistics */
-	if(dlg_enable_stats
-			&& (register_module_stats("dialog", mod_stats) != 0)) {
+	if(dlg_enable_stats && (register_module_stats("dialog", mod_stats) != 0)) {
 		LM_ERR("failed to register statistics\n");
 		return -1;
 	}
@@ -567,12 +583,6 @@ static int mod_init(void)
 
 	if(dlg_bridge_init_hdrs() < 0)
 		return -1;
-
-	/* param checkings */
-	if(dlg_flag != -1 && dlg_flag > MAX_FLAG) {
-		LM_ERR("invalid dlg flag %d!!\n", dlg_flag);
-		return -1;
-	}
 
 	if(rr_param == 0 || rr_param[0] == 0) {
 		LM_ERR("empty rr_param!!\n");
@@ -660,9 +670,11 @@ static int mod_init(void)
 
 	/* register callbacks*/
 	/* listen for all incoming requests  */
-	if(d_tmb.register_tmcb(0, 0, TMCB_REQUEST_IN, dlg_onreq, 0, 0) <= 0) {
-		LM_ERR("cannot register TMCB_REQUEST_IN callback\n");
-		return -1;
+	if(dlg_process_mode == 0) {
+		if(d_tmb.register_tmcb(0, 0, TMCB_REQUEST_IN, dlg_onreq, 0, 0) <= 0) {
+			LM_ERR("cannot register TMCB_REQUEST_IN callback\n");
+			return -1;
+		}
 	}
 
 	/* listen for all routed requests  */
@@ -715,7 +727,7 @@ static int mod_init(void)
 	}
 
 	/* init handlers */
-	init_dlg_handlers(rr_param, dlg_flag, timeout_spec.s ? &timeout_avp : 0,
+	init_dlg_handlers(rr_param, timeout_spec.s ? &timeout_avp : 0,
 			default_timeout, seq_match_mode, dlg_keep_proxy_rr);
 
 	/* init timer */
@@ -793,6 +805,9 @@ static int mod_init(void)
 		ksr_module_set_flag(KSRMOD_FLAG_POSTCHILDINIT);
 	}
 
+	if(dlg_process_mode != 0) {
+		sr_event_register_cb(SREV_SIP_REPLY_OUT, dlg_sip_reply_out);
+	}
 	return 0;
 }
 
@@ -865,14 +880,17 @@ static void mod_destroy(void)
 		dialog_update_db(0, 0);
 		destroy_dlg_db();
 	}
-	dlg_bridge_destroy_hdrs();
-	/* no DB interaction from now on */
-	dlg_db_mode = DB_MODE_NONE;
-	destroy_dlg_table();
-	destroy_dlg_timer();
-	destroy_dlg_callbacks(DLGCB_CREATED | DLGCB_LOADED);
-	destroy_dlg_handlers();
-	destroy_dlg_profiles();
+}
+
+
+/**
+ *
+ */
+static int dlg_sip_reply_out(sr_event_param_t *evp)
+{
+	LM_DBG("handling sip response\n");
+	dlg_update_state(evp->rpl);
+	return 0;
 }
 
 
@@ -1052,6 +1070,28 @@ static int w_get_profile_size2(struct sip_msg *msg, char *profile, char *result)
 }
 
 
+/*!
+ * \brief Update dialog sflags and trigger database persistence
+ * \param d dialog cell
+ *
+ * This function handles the database update logic for sflags changes.
+ * In REALTIME mode, it immediately triggers a database update.
+ * In DELAYED/SHUTDOWN modes, it sets flags that will be processed
+ * by the timer or shutdown handler.
+ */
+static void dlg_update_sflags_db(dlg_cell_t *d)
+{
+	d->dflags |= DLG_FLAG_CHANGED_SFLAGS;
+	if(dlg_db_mode == DB_MODE_REALTIME) {
+		d->dflags |= DLG_FLAG_CHANGED;
+		update_dialog_dbinfo(d);
+	} else if(dlg_db_mode == DB_MODE_DELAYED
+			  || dlg_db_mode == DB_MODE_SHUTDOWN) {
+		/* Flag will be processed by timer or shutdown handler */
+		d->dflags |= DLG_FLAG_CHANGED;
+	}
+}
+
 static int ki_dlg_setflag(struct sip_msg *msg, int val)
 {
 	dlg_ctx_t *dctx;
@@ -1066,6 +1106,7 @@ static int ki_dlg_setflag(struct sip_msg *msg, int val)
 	d = dlg_get_by_iuid(&dctx->iuid);
 	if(d != NULL) {
 		d->sflags |= 1 << val;
+		dlg_update_sflags_db(d);
 		dlg_release(d);
 	}
 	return 1;
@@ -1098,6 +1139,7 @@ static int ki_dlg_resetflag(struct sip_msg *msg, int val)
 	d = dlg_get_by_iuid(&dctx->iuid);
 	if(d != NULL) {
 		d->sflags &= ~(1 << val);
+		dlg_update_sflags_db(d);
 		dlg_release(d);
 	}
 	return 1;
@@ -1152,6 +1194,78 @@ static int w_dlg_isflagset(struct sip_msg *msg, char *flag, str *s2)
 static int w_dlg_manage(struct sip_msg *msg, char *s1, char *s2)
 {
 	return dlg_manage(msg);
+}
+
+/**
+ *
+ */
+static int ki_dlg_set_state(sip_msg_t *msg, str *state)
+{
+	int istate = 0;
+
+	if(state == NULL || state->s == NULL || state->len <= 0) {
+		LM_ERR("invalid state value\n");
+		return -1;
+	}
+	switch(state->s[0]) {
+		case 'u':
+		case 'U':
+			istate = DLG_STATE_UNCONFIRMED;
+			break;
+		case 'e':
+		case 'E':
+			istate = DLG_STATE_EARLY;
+			break;
+		case 'a':
+		case 'A':
+			istate = DLG_STATE_CONFIRMED_NA;
+			break;
+		case 'c':
+		case 'C':
+			istate = DLG_STATE_CONFIRMED;
+			break;
+		case 'd':
+		case 'D':
+			istate = DLG_STATE_DELETED;
+			break;
+		default:
+			LM_ERR("unknown state value: %.*s\n", state->len, state->s);
+			return -1;
+	}
+	if(dlg_set_state(msg, istate) < 0) {
+		return -1;
+	}
+	return 1;
+}
+
+/**
+ *
+ */
+static int w_dlg_set_state(sip_msg_t *msg, char *pstate, char *p2)
+{
+	str state = STR_NULL;
+
+	if(fixup_get_svalue(msg, (gparam_t *)pstate, &state) != 0) {
+		LM_ERR("unable to get Method\n");
+		return -1;
+	}
+	return ki_dlg_set_state(msg, &state);
+}
+
+/**
+ *
+ */
+static int ki_dlg_update_state(sip_msg_t *msg)
+{
+	return dlg_update_state(msg);
+}
+
+/**
+ *
+ */
+static int w_dlg_update_state(sip_msg_t *msg, char *pstate, char *p2)
+{
+	return dlg_update_state(msg);
 }
 
 static int fixup_dlg_dlg_req_within(void **param, int param_no)
@@ -1279,19 +1393,57 @@ static int fixup_dlg_req_with_headers_and_content(void **param, int param_no)
 	return 0;
 }
 
+static int ki_dlg_req_with_headers_and_content(struct sip_msg *msg, int nside,
+		str *smethod, str *sheaders, str *scontent_type, str *scontent)
+{
+	dlg_cell_t *dlg = NULL;
+
+	dlg = dlg_get_ctx_dialog();
+	if(dlg == NULL)
+		return -1;
+
+	if(nside == 1) {
+		if(dlg_request_within(msg, dlg, DLG_CALLER_LEG, smethod, sheaders,
+				   scontent_type, scontent)
+				!= 0)
+			goto error;
+		goto done;
+	} else if(nside == 2) {
+		if(dlg_request_within(msg, dlg, DLG_CALLEE_LEG, smethod, sheaders,
+				   scontent_type, scontent)
+				!= 0)
+			goto error;
+		goto done;
+	} else {
+		if(dlg_request_within(msg, dlg, DLG_CALLER_LEG, smethod, sheaders,
+				   scontent_type, scontent)
+				!= 0)
+			goto error;
+		if(dlg_request_within(msg, dlg, DLG_CALLEE_LEG, smethod, sheaders,
+				   scontent_type, scontent)
+				!= 0)
+			goto error;
+		goto done;
+	}
+
+done:
+	dlg_release(dlg);
+	return 1;
+
+error:
+	dlg_release(dlg);
+	return -1;
+}
+
 static int w_dlg_req_with_headers_and_content(struct sip_msg *msg, char *side,
 		char *method, char *headers, char *content_type, char *content)
 {
-	dlg_cell_t *dlg = NULL;
 	int n;
 	str str_method = {0, 0};
 	str str_headers = {0, 0};
 	str str_content_type = {0, 0};
 	str str_content = {0, 0};
 
-	dlg = dlg_get_ctx_dialog();
-	if(dlg == NULL)
-		return -1;
 
 	if(fixup_get_svalue(msg, (gparam_p)method, &str_method) != 0) {
 		LM_ERR("unable to get Method\n");
@@ -1333,36 +1485,11 @@ static int w_dlg_req_with_headers_and_content(struct sip_msg *msg, char *side,
 	}
 
 	n = (int)(long)side;
-	if(n == 1) {
-		if(dlg_request_within(msg, dlg, DLG_CALLER_LEG, &str_method,
-				   &str_headers, &str_content_type, &str_content)
-				!= 0)
-			goto error;
-		goto done;
-	} else if(n == 2) {
-		if(dlg_request_within(msg, dlg, DLG_CALLEE_LEG, &str_method,
-				   &str_headers, &str_content_type, &str_content)
-				!= 0)
-			goto error;
-		goto done;
-	} else {
-		if(dlg_request_within(msg, dlg, DLG_CALLER_LEG, &str_method,
-				   &str_headers, &str_content_type, &str_content)
-				!= 0)
-			goto error;
-		if(dlg_request_within(msg, dlg, DLG_CALLEE_LEG, &str_method,
-				   &str_headers, &str_content_type, &str_content)
-				!= 0)
-			goto error;
-		goto done;
-	}
 
-done:
-	dlg_release(dlg);
-	return 1;
+	return ki_dlg_req_with_headers_and_content(
+			msg, n, &str_method, &str_headers, &str_content_type, &str_content);
 
 error:
-	dlg_release(dlg);
 	return -1;
 }
 
@@ -1452,6 +1579,166 @@ static int w_dlg_refer(struct sip_msg *msg, char *side, char *to)
 
 error:
 	dlg_release(dlg);
+	return -1;
+}
+
+static int ki_dlg_refer_did(
+		sip_msg_t *msg, int h_entry, int h_id, str *side, str *to)
+{
+	dlg_cell_t *dlg = NULL;
+	if(to->s == NULL || to->len == 0) {
+		LM_ERR("invalid To parameter\n");
+		goto error;
+	}
+	dlg = dlg_lookup((unsigned int)h_entry, (unsigned int)h_id);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found (%d:%d)\n", h_entry, h_id);
+		goto error;
+	}
+	if(side->len == 6 && strncasecmp(side->s, "caller", 6) == 0) {
+		if(dlg_transfer(dlg, to, DLG_CALLER_LEG) != 0)
+			goto error;
+	} else {
+		if(dlg_transfer(dlg, to, DLG_CALLEE_LEG) != 0)
+			goto error;
+	}
+
+	dlg_release(dlg);
+	return 1;
+
+error:
+	if(dlg != NULL) {
+		dlg_release(dlg);
+	}
+	return -1;
+}
+
+static int w_dlg_refer_did(
+		sip_msg_t *msg, char *entry, char *id, char *side, char *to)
+{
+	dlg_cell_t *dlg = NULL;
+	int h_entry = 0;
+	int h_id = 0;
+	str sside = {0, 0};
+	str sto = {0, 0};
+
+	if(fixup_get_ivalue(msg, (gparam_t *)entry, &h_entry) != 0) {
+		LM_ERR("unable to get entry\n");
+		goto error;
+	}
+	if(fixup_get_ivalue(msg, (gparam_t *)id, &h_id) != 0) {
+		LM_ERR("unable to get id\n");
+		goto error;
+	}
+	if(fixup_get_svalue(msg, (gparam_t *)side, &sside) != 0) {
+		LM_ERR("unable to get side\n");
+		goto error;
+	}
+	if(fixup_get_svalue(msg, (gparam_t *)to, &sto) != 0) {
+		LM_ERR("unable to get To\n");
+		goto error;
+	}
+	if(sto.s == NULL || sto.len == 0) {
+		LM_ERR("invalid To parameter\n");
+		goto error;
+	}
+	dlg = dlg_lookup((unsigned int)h_entry, (unsigned int)h_id);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found (%d:%d)\n", h_entry, h_id);
+		goto error;
+	}
+	if(sside.len == 6 && strncasecmp(sside.s, "caller", 6) == 0) {
+		if(dlg_transfer(dlg, &sto, DLG_CALLER_LEG) != 0)
+			goto error;
+	} else {
+		if(dlg_transfer(dlg, &sto, DLG_CALLEE_LEG) != 0)
+			goto error;
+	}
+
+	dlg_release(dlg);
+	return 1;
+
+error:
+	if(dlg != NULL) {
+		dlg_release(dlg);
+	}
+	return -1;
+}
+
+static int ki_dlg_refer_cid(sip_msg_t *msg, str *callid, str *side, str *to)
+{
+	dlg_cell_t *dlg = NULL;
+
+	if(to->s == NULL || to->len == 0) {
+		LM_ERR("invalid To parameter\n");
+		goto error;
+	}
+	dlg = dlg_search_cid(callid, 0);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found (%.*s)\n", callid->len, callid->s);
+		goto error;
+	}
+	if(side->len == 6 && strncasecmp(side->s, "caller", 6) == 0) {
+		if(dlg_transfer(dlg, to, DLG_CALLER_LEG) != 0)
+			goto error;
+	} else {
+		if(dlg_transfer(dlg, to, DLG_CALLEE_LEG) != 0)
+			goto error;
+	}
+
+	dlg_release(dlg);
+	return 1;
+
+error:
+	if(dlg != NULL) {
+		dlg_release(dlg);
+	}
+	return -1;
+}
+
+static int w_dlg_refer_cid(sip_msg_t *msg, char *callid, char *side, char *to)
+{
+	dlg_cell_t *dlg = NULL;
+	str scallid = {0, 0};
+	str sside = {0, 0};
+	str sto = {0, 0};
+
+	if(fixup_get_svalue(msg, (gparam_t *)callid, &scallid) != 0) {
+		LM_ERR("unable to get id\n");
+		goto error;
+	}
+	if(fixup_get_svalue(msg, (gparam_t *)side, &sside) != 0) {
+		LM_ERR("unable to get side\n");
+		goto error;
+	}
+	if(fixup_get_svalue(msg, (gparam_t *)to, &sto) != 0) {
+		LM_ERR("unable to get To\n");
+		goto error;
+	}
+	if(sto.s == NULL || sto.len == 0) {
+		LM_ERR("invalid To parameter\n");
+		goto error;
+	}
+	dlg = dlg_search_cid(&scallid, 0);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found (%.*s)\n", scallid.len, scallid.s);
+		goto error;
+	}
+	if(sside.len == 6 && strncasecmp(sside.s, "caller", 6) == 0) {
+		if(dlg_transfer(dlg, &sto, DLG_CALLER_LEG) != 0)
+			goto error;
+	} else {
+		if(dlg_transfer(dlg, &sto, DLG_CALLEE_LEG) != 0)
+			goto error;
+	}
+
+	dlg_release(dlg);
+	return 1;
+
+error:
+	if(dlg != NULL) {
+		dlg_release(dlg);
+	}
 	return -1;
 }
 
@@ -1768,32 +2055,36 @@ static int fixup_dlg_bridge(void **param, int param_no)
 	return 0;
 }
 
-static str *ki_dlg_get_var_helper(
-		sip_msg_t *msg, str *sc, str *sf, str *st, str *key)
+static int ki_dlg_get_var_helper(
+		sip_msg_t *msg, str *sc, str *sf, str *st, str *key, str *val)
 {
 	dlg_cell_t *dlg = NULL;
 	unsigned int dir = 0;
-	str *val = NULL;
 
 	if(sc == NULL || sc->s == NULL || sc->len == 0) {
 		LM_ERR("invalid Call-ID parameter\n");
-		return val;
+		return -1;
 	}
 	if(sf == NULL || sf->s == NULL || sf->len == 0) {
 		LM_ERR("invalid From tag parameter\n");
-		return val;
+		return -1;
 	}
 	if(st == NULL) {
 		LM_ERR("invalid To tag parameter\n");
-		return val;
+		return -1;
 	}
 
 	dlg = get_dlg(sc, sf, st, &dir);
-	if(dlg == NULL)
-		return val;
-	val = get_dlg_varref(dlg, key);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found for call-id: %.*s\n", sc->len, sc->s);
+		return -1;
+	}
+	if(get_dlg_varval(dlg, key, val) != 0) {
+		dlg_release(dlg);
+		return -1;
+	}
 	dlg_release(dlg);
-	return val;
+	return 0;
 }
 
 /**
@@ -1804,18 +2095,15 @@ static sr_kemi_xval_t _sr_kemi_dialog_xval = {0};
 static sr_kemi_xval_t *ki_dlg_get_var(
 		sip_msg_t *msg, str *sc, str *sf, str *st, str *key)
 {
-	str *val = NULL;
-
 	memset(&_sr_kemi_dialog_xval, 0, sizeof(sr_kemi_xval_t));
 
-	val = ki_dlg_get_var_helper(msg, sc, sf, st, key);
-	if(!val) {
+	if(ki_dlg_get_var_helper(msg, sc, sf, st, key, &_sr_kemi_dialog_xval.v.s)
+			< 0) {
 		sr_kemi_xval_null(&_sr_kemi_dialog_xval, SR_KEMI_XVAL_NULL_NONE);
 		return &_sr_kemi_dialog_xval;
 	}
 
 	_sr_kemi_dialog_xval.vtype = SR_KEMIP_STR;
-	_sr_kemi_dialog_xval.v.s = *val;
 
 	return &_sr_kemi_dialog_xval;
 }
@@ -2420,8 +2708,12 @@ static int ki_dlg_var_sets(sip_msg_t *msg, str *name, str *val)
 	int ret;
 
 	dlg = dlg_get_msg_dialog(msg);
+	if(dlg) {
+		dlg_cell_lock(dlg);
+	}
 	ret = set_dlg_variable_unsafe(dlg, name, val);
 	if(dlg) {
+		dlg_cell_unlock(dlg);
 		dlg_release(dlg);
 	}
 
@@ -2434,7 +2726,6 @@ static int ki_dlg_var_sets(sip_msg_t *msg, str *name, str *val)
 static sr_kemi_xval_t *ki_dlg_var_get_mode(sip_msg_t *msg, str *name, int rmode)
 {
 	dlg_cell_t *dlg;
-	str *pval;
 
 	memset(&_sr_kemi_dialog_xval, 0, sizeof(sr_kemi_xval_t));
 
@@ -2443,14 +2734,12 @@ static sr_kemi_xval_t *ki_dlg_var_get_mode(sip_msg_t *msg, str *name, int rmode)
 		sr_kemi_xval_null(&_sr_kemi_dialog_xval, rmode);
 		return &_sr_kemi_dialog_xval;
 	}
-	pval = get_dlg_varref(dlg, name);
-	if(pval == NULL || pval->s == NULL) {
+	if(get_dlg_varval(dlg, name, &_sr_kemi_dialog_xval.v.s) < 0) {
 		sr_kemi_xval_null(&_sr_kemi_dialog_xval, rmode);
 		goto done;
 	}
 
 	_sr_kemi_dialog_xval.vtype = SR_KEMIP_STR;
-	_sr_kemi_dialog_xval.v.s = *pval;
 
 done:
 	dlg_release(dlg);
@@ -2488,7 +2777,12 @@ static int ki_dlg_var_rm(sip_msg_t *msg, str *name)
 	dlg_cell_t *dlg;
 
 	dlg = dlg_get_msg_dialog(msg);
-	set_dlg_variable_unsafe(dlg, name, NULL);
+	if(dlg) {
+		dlg_cell_lock(dlg);
+		set_dlg_variable_unsafe(dlg, name, NULL);
+		dlg_cell_unlock(dlg);
+		dlg_release(dlg);
+	}
 	return 1;
 }
 
@@ -2514,10 +2808,41 @@ static int ki_dlg_var_is_null(sip_msg_t *msg, str *name)
 /**
  *
  */
+static int ki_dlg_req_within4(struct sip_msg *msg, str *side, str *method,
+		str *content_type, str *content)
+{
+	int n = 0;
+	if(side && side->len > 0) {
+		if(side->len == 6 && strncasecmp(side->s, "caller", 6) == 0) {
+			n = 1;
+		} else if(side->len == 6 && strncasecmp(side->s, "callee", 6) == 0) {
+			n = 2;
+		} else {
+			return -1;
+		}
+	}
+
+	return ki_dlg_req_with_headers_and_content(
+			msg, n, method, NULL, content_type, content);
+}
+
+/**
+ *
+ */
 /* clang-format off */
 static sr_kemi_t sr_kemi_dialog_exports[] = {
 	{ str_init("dialog"), str_init("dlg_manage"),
 		SR_KEMIP_INT, dlg_manage,
+		{ SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dialog"), str_init("dlg_set_state"),
+		SR_KEMIP_INT, ki_dlg_set_state,
+		{ SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dialog"), str_init("dlg_update_state"),
+		SR_KEMIP_INT, ki_dlg_update_state,
 		{ SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
@@ -2665,6 +2990,21 @@ static sr_kemi_t sr_kemi_dialog_exports[] = {
 		SR_KEMIP_INT, ki_dlg_bridge,
 		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
 			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dialog"), str_init("dlg_refer_did"),
+		SR_KEMIP_INT, ki_dlg_refer_did,
+		{ SR_KEMIP_INT, SR_KEMIP_INT, SR_KEMIP_STR,
+			SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dialog"), str_init("dlg_refer_cid"),
+		SR_KEMIP_INT, ki_dlg_refer_cid,
+		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("dialog"), str_init("dlg_req_within4"),
+		SR_KEMIP_INT, ki_dlg_req_within4,
+		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_STR,
+			SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
 
 	{ {0, 0}, {0, 0}, 0, NULL, { 0, 0, 0, 0, 0, 0 } }
@@ -3229,8 +3569,8 @@ static void rpc_dlg_set_state(rpc_t *rpc, void *c)
 	/* updates for terminated dialogs */
 	if(ostate == DLG_STATE_CONFIRMED && sval == DLG_STATE_DELETED) {
 		/* updating timestamps, flags, dialog stats */
-		dlg->init_ts = (unsigned int)(time(0));
-		dlg->end_ts = (unsigned int)(time(0));
+		dlg->init_ts = ksr_time_uint(NULL, NULL);
+		dlg->end_ts = ksr_time_uint(NULL, NULL);
 	}
 	dlg->dflags |= DLG_FLAG_CHANGED;
 

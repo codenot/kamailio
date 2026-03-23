@@ -149,16 +149,20 @@ int load_certificates(SSL_CTX *ctx, str *cert, str *key)
 	}
 	if(pkg_str_dup(&key_fixed, key) < 0) {
 		LM_ERR("Failed to copy key parameter\n");
+		pkg_free(cert_fixed.s);
 		return -1;
 	}
 	if(!SSL_CTX_use_certificate_chain_file(ctx, cert_fixed.s)) {
 		LM_ERR("Unable to load certificate file\n");
 		TLS_LM_ERR("load_cert:", ctx);
+		pkg_free(key_fixed.s);
+		pkg_free(cert_fixed.s);
 		return -1;
 	}
 	if(SSL_CTX_use_PrivateKey_file(ctx, key_fixed.s, SSL_FILETYPE_PEM) <= 0) {
 		LM_ERR("Unable to load private key file\n");
 		TLS_LM_ERR("load_private_key:", ctx);
+		pkg_free(key_fixed.s);
 		return -1;
 	}
 	if(!SSL_CTX_check_private_key(ctx)) {
@@ -252,9 +256,13 @@ cleanup:
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L
 void cleanup_ssl(SSL_CTX *tls_ctx, SSL *tls_conn)
 {
-	SSL_shutdown(tls_conn);
-	SSL_free(tls_conn);
-	SSL_CTX_free(tls_ctx);
+	if(tls_conn) {
+		SSL_shutdown(tls_conn);
+		SSL_free(tls_conn);
+	}
+	if(tls_ctx) {
+		SSL_CTX_free(tls_ctx);
+	}
 }
 #endif
 

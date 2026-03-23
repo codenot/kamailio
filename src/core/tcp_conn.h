@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -27,6 +29,7 @@
 #include "tcp_init.h"
 #include "tcp_options.h"
 
+#include "str.h"
 #include "ip_addr.h"
 #include "locking.h"
 #include "atomic_ops.h"
@@ -38,7 +41,7 @@
 
 #define TCP_CHILD_TIMEOUT \
 	5							   /* after 5 seconds, the child "returns"
-							 * the connection to the tcp maing process */
+							 * the connection to the tcp main process */
 #define TCP_MAIN_SELECT_TIMEOUT 5  /* how often "tcp main" checks for timeout*/
 #define TCP_CHILD_SELECT_TIMEOUT 2 /* the same as above but for children */
 
@@ -62,6 +65,7 @@
 #define F_CONN_PASSIVE 16384  /* conn. created via accept() and not connect()*/
 #define F_CONN_CLOSE_EV 32768 /* explicitely call tcpops ev route when closed */
 #define F_CONN_NOSEND 65536	  /* do not send data on this connection */
+#define F_CONN_NORECV (1 << 17) /* do not receive data on this connection */
 
 #ifndef NO_READ_HTTP11
 #define READ_HTTP11
@@ -74,6 +78,17 @@
 #ifndef NO_READ_WS
 #define READ_WS
 #endif
+
+/* tcp application protocol flags */
+#define KSR_TCPAP_HTTP 4
+#define KSR_TCPAP_WS 8
+#define KSR_TCPAP_MSRP 16
+#define KSR_TCPAP_HEP 32
+#define KSR_TCPAP_HEP3 32
+#define KSR_TCPAP_STUN 64
+#define KSR_TCPAP_HAPROXY 128
+#define KSR_TCPAP_DEFAULT \
+	(KSR_TCPAP_HTTP | KSR_TCPAP_WS | KSR_TCPAP_MSRP | KSR_TCPAP_STUN)
 
 typedef enum tcp_req_errors
 {
@@ -261,6 +276,18 @@ enum tcp_closed_reason
 	_TCP_CLOSED_REASON_MAX /* /!\ keep this one always at the end */
 };
 
+typedef struct ksr_coninfo
+{
+	ip_addr_t src_ip;
+	ip_addr_t dst_ip;
+	unsigned short src_port; /* host byte order */
+	unsigned short dst_port; /* host byte order */
+	int proto;
+	socket_info_t *csocket;
+	str server_name; /* outbound tls server name (sni) */
+	str server_id;	 /* outbound tls server id */
+} ksr_coninfo_t;
+
 
 typedef struct tcp_connection
 {
@@ -272,7 +299,7 @@ typedef struct tcp_connection
 	enum tcp_closed_reason event; /* connection close reason */
 	int reader_pid;				  /* pid of the active reader process */
 	struct receive_info rcv;	  /* src & dst ip, ports, proto a.s.o*/
-	ksr_coninfo_t cinfo;		  /* connection info (e.g., for haproxy ) */
+	ksr_coninfo_t cinfo;		  /* additional info (for haproxy, tls, ...) */
 	struct tcp_req req;			  /* request data */
 	atomic_t refcnt;
 	enum sip_protos type;		/* PROTO_TCP or a protocol over it, e.g. TLS */
@@ -334,14 +361,14 @@ typedef struct tcp_connection
 #define tcpconn_put(c) atomic_dec_and_test(&((c)->refcnt))
 
 
-#define init_tcp_req(r, rd_buf, rd_buf_size)                   \
-	do {                                                       \
-		memset((r), 0, sizeof(struct tcp_req));                \
-		(r)->buf = (rd_buf);                                   \
-		(r)->b_size = (rd_buf_size)-1; /* space for 0 term. */ \
-		(r)->parsed = (r)->pos = (r)->start = (r)->buf;        \
-		(r)->error = TCP_REQ_OK;                               \
-		(r)->state = H_SKIP_EMPTY;                             \
+#define init_tcp_req(r, rd_buf, rd_buf_size)                     \
+	do {                                                         \
+		memset((r), 0, sizeof(struct tcp_req));                  \
+		(r)->buf = (rd_buf);                                     \
+		(r)->b_size = (rd_buf_size) - 1; /* space for 0 term. */ \
+		(r)->parsed = (r)->pos = (r)->start = (r)->buf;          \
+		(r)->error = TCP_REQ_OK;                                 \
+		(r)->state = H_SKIP_EMPTY;                               \
 	} while(0)
 
 
@@ -374,7 +401,7 @@ typedef struct tcp_connection
 #define TCPCONN_UNLOCK lock_release(tcpconn_lock);
 
 #define TCP_ALIAS_HASH_SIZE 4096
-#define TCP_ID_HASH_SIZE 1024
+#define TCP_ID_HASH_SIZE 2048
 
 /* hash (dst_ip, dst_port, local_ip, local_port) */
 static inline unsigned tcp_addr_hash(struct ip_addr *ip, unsigned short port,
@@ -435,5 +462,11 @@ typedef struct ws_event_info
 } ws_event_info_t;
 
 tcp_connection_t *ksr_tcpcon_evcb_get(void);
+
+int is_tcp_main(void);
+
+#define _tconfd(c) (is_tcp_main() ? (c)->s : (c)->fd)
+
+int ksr_tcp_parse_accept_protocols(char *protos);
 
 #endif

@@ -40,7 +40,10 @@
 #include "../../core/mod_fix.h"
 #include "../../core/fmsg.h"
 #include "../../core/events.h"
+#include "../../core/srapi.h"
+#include "../../core/receive.h"
 #include "../../core/kemi.h"
+#include "../../core/cfg/cfg_struct.h"
 
 #include "sipdump_write.h"
 
@@ -49,11 +52,13 @@ MODULE_VERSION
 static int sipdump_enable = 0;
 int sipdump_rotate = 7200;
 static int sipdump_wait = 100;
+static int sipdump_wait_mode = 0;
 static str sipdump_folder = str_init("/tmp");
 static str sipdump_fprefix = str_init("kamailio-sipdump-");
 int sipdump_mode = SIPDUMP_MODE_WTEXT;
 static str sipdump_event_callback = STR_NULL;
 static int sipdump_fage = 0;
+static str sipdump_fagex = STR_NULL;
 
 static int sipdump_event_route_idx = -1;
 
@@ -74,17 +79,19 @@ int pv_get_sipdump(sip_msg_t *msg, pv_param_t *param, pv_value_t *res);
 /* clang-format off */
 static cmd_export_t cmds[]={
 	{"sipdump_send", (cmd_function)w_sipdump_send, 1, fixup_spve_null,
-		0, ANY_ROUTE},
+		fixup_free_spve_null, ANY_ROUTE},
 	{0, 0, 0, 0, 0, 0}
 };
 
 static param_export_t params[]={
 	{"enable",         PARAM_INT,   &sipdump_enable},
 	{"wait",           PARAM_INT,   &sipdump_wait},
+	{"wait_mode",      PARAM_INT,   &sipdump_wait_mode},
 	{"rotate",         PARAM_INT,   &sipdump_rotate},
 	{"folder",         PARAM_STR,   &sipdump_folder},
 	{"fprefix",        PARAM_STR,   &sipdump_fprefix},
 	{"fage",           PARAM_INT,   &sipdump_fage},
+	{"fagex",          PARAM_STR,   &sipdump_fagex},
 	{"mode",           PARAM_INT,   &sipdump_mode},
 	{"event_callback", PARAM_STR,   &sipdump_event_callback},
 
@@ -119,6 +126,9 @@ struct module_exports exports = {
  */
 static int mod_init(void)
 {
+	int i;
+	int n;
+
 	if(!(sipdump_mode
 			   & (SIPDUMP_MODE_WTEXT | SIPDUMP_MODE_WPCAP
 					   | SIPDUMP_MODE_EVROUTE))) {
@@ -154,7 +164,45 @@ static int mod_init(void)
 	}
 
 	if(sipdump_mode & (SIPDUMP_MODE_WTEXT | SIPDUMP_MODE_WPCAP)) {
-		register_basic_timers(1);
+		if(sipdump_wait_mode != 0) {
+			if(ksr_sdsem_init() < 0) {
+				LM_ERR("cannot initialize sem structure\n");
+				return -1;
+			}
+			register_procs(1);
+		} else {
+			register_basic_timers(1);
+		}
+	}
+
+	if(sipdump_fagex.len > 0) {
+		n = 0;
+		sipdump_fage = 0;
+		for(i = 0; i < sipdump_fagex.len; i++) {
+			if(sipdump_fagex.s[i] >= 0 && sipdump_fagex.s[i] <= 9) {
+				n = 10 * n + (sipdump_fagex.s[i] - '0');
+			} else {
+				if(sipdump_fagex.s[i] == 'h' || sipdump_fagex.s[i] == 'H') {
+					sipdump_fage += 3600 * n;
+					n = 0;
+				} else if(sipdump_fagex.s[i] == 'd'
+						  || sipdump_fagex.s[i] == 'D') {
+					sipdump_fage += 24 * 3600 * n;
+					n = 0;
+				} else if(sipdump_fagex.s[i] == 'm'
+						  || sipdump_fagex.s[i] == 'M') {
+					sipdump_fage += 60 * n;
+					n = 0;
+				} else if(sipdump_fagex.s[i] == 's'
+						  || sipdump_fagex.s[i] == 'S') {
+					sipdump_fage += n;
+					n = 0;
+				} else {
+					LM_ERR("unexpected file age char '%c' at position %d\n",
+							sipdump_fagex.s[i], i);
+				}
+			}
+		}
 	}
 
 	if(sipdump_fage > 0) {
@@ -174,6 +222,7 @@ static int mod_init(void)
  */
 static int child_init(int rank)
 {
+	int pid;
 
 	if(rank != PROC_MAIN)
 		return 0;
@@ -182,11 +231,27 @@ static int child_init(int rank)
 		return 0;
 	}
 
-	if(fork_basic_utimer(PROC_TIMER, "SIPDUMP WRITE TIMER", 1 /*socks flag*/,
-			   sipdump_timer_exec, NULL, sipdump_wait /*usec*/)
-			< 0) {
-		LM_ERR("failed to register timer routine as process\n");
-		return -1; /* error */
+	if(sipdump_wait_mode != 0) {
+		pid = fork_process(PROC_RPC, "SIPDUMP WRITE PROCESS", 1);
+		if(pid < 0) {
+			return -1; /* error */
+		}
+		if(pid == 0) {
+			/* child */
+			/* initialize the config framework */
+			if(cfg_child_init()) {
+				return -1;
+			}
+			sipdump_process_exec();
+		}
+	} else {
+		if(fork_basic_utimer(PROC_TIMER, "SIPDUMP WRITE TIMER",
+				   1 /*socks flag*/, sipdump_timer_exec, NULL,
+				   sipdump_wait /*usec*/)
+				< 0) {
+			LM_ERR("failed to register timer routine as process\n");
+			return -1; /* error */
+		}
 	}
 
 	return 0;
@@ -286,14 +351,14 @@ static sipdump_data_t *sipdump_event_data = NULL;
  */
 int sipdump_event_route(sipdump_data_t *sdi)
 {
-	int backup_rt;
 	run_act_ctx_t ctx;
 	run_act_ctx_t *bctx;
 	sr_kemi_eng_t *keng = NULL;
 	str evname = str_init("sipdump:msg");
 	sip_msg_t *fmsg = NULL;
+	ksr_msg_env_links_t menv = {0};
 
-	backup_rt = get_route_type();
+	ksr_msg_env_push(&menv);
 	set_route_type(EVENT_ROUTE);
 	init_run_actions_ctx(&ctx);
 	fmsg = faked_msg_next();
@@ -312,7 +377,8 @@ int sipdump_event_route(sipdump_data_t *sdi)
 		}
 	}
 	sipdump_event_data = NULL;
-	set_route_type(backup_rt);
+	ksr_msg_env_reset();
+	ksr_msg_env_pop(&menv);
 	if(ctx.run_flags & DROP_R_F) {
 		return DROP_R_F;
 	}

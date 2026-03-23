@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -53,6 +55,9 @@ dmq_node_t *add_server_and_notify(str_list_t *server_list);
 /* helper functions */
 extern int notification_resp_callback_f(
 		struct sip_msg *msg, int code, dmq_node_t *node, void *param);
+extern int default_resp_callback_f(
+		struct sip_msg *msg, int code, dmq_node_t *node, void *param);
 extern dmq_resp_cback_t dmq_notification_resp_callback;
+extern dmq_resp_cback_t dmq_default_resp_callback;
 
 #endif

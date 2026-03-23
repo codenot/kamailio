@@ -6,7 +6,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -16,7 +16,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -26,6 +26,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -440,17 +442,19 @@ static inline void process_impurecord(impurecord_t *_r)
 				mustdeleteimpu = 0;
 				hascontacts = 1;
 			} else {
-				LM_WARN("Bogus state for contact [%.*s] - state: %d... "
+				LM_WARN("Bogus state for contact [%.*s] - state: %s... "
 						"ignoring\n",
-						ptr->c.len, ptr->c.s, ptr->state);
+						ptr->c.len, ptr->c.s,
+						get_contact_state_as_string(ptr->state));
 				mustdeleteimpu = 0;
 				hascontacts = 1;
 			}
 		} else {
 			LM_DBG("\t\tContact #%i - %.*s, Ref [%d] (expires in %" TIME_T_FMT
-				   " seconds) (State: %d)\n",
+				   " seconds) (State: %s)\n",
 					k, ptr->c.len, ptr->c.s, ptr->ref_count,
-					TIME_T_CAST(ptr->expires - act_time), ptr->state);
+					TIME_T_CAST(ptr->expires - act_time),
+					get_contact_state_as_string(ptr->state));
 			mustdeleteimpu = 0;
 			hascontacts = 1;
 		}
@@ -710,6 +714,13 @@ int aor_to_contact(str *aor, str *contact)
 		contact->len = p - contact->s;
 	}
 
+	// remove default port 5060
+	if((p = memchr(contact->s, ':', contact->len))) {
+		if(contact->len - (p - contact->s) == 5 && !memcmp(p, ":5060", 5)) {
+			contact->len -= 5;
+		}
+	}
+
 	return ret;
 }
 
@@ -871,9 +882,9 @@ int get_scontact(
 			}
 		}
 		LM_DBG("contact found p=[%p], aor:[%.*s] and contact:[%.*s], state "
-			   "[%d]\n",
+			   "[%s]\n",
 				ptr, ptr->aor.len, ptr->aor.s, ptr->c.len, ptr->c.s,
-				ptr->state);
+				get_contact_state_as_string(ptr->state));
 		ref_contact_unsafe(ptr);
 		*_co = ptr;
 		unlock_contact_slot_i(

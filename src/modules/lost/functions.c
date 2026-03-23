@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -171,9 +173,9 @@ err:
 int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 		char *_err, char *_id)
 {
-	pv_spec_t *pspidf;
-	pv_spec_t *psurl;
-	pv_spec_t *pserr;
+	pv_spec_t *pspidf = NULL;
+	pv_spec_t *psurl = NULL;
+	pv_spec_t *pserr = NULL;
 
 	pv_value_t pvpidf;
 	pv_value_t pvurl;
@@ -185,9 +187,10 @@ int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 	xmlNodePtr root = NULL;
 	xmlNodePtr cur_node = NULL;
 
-	str geo = STR_NULL; /* return value geolocation uri */
-	str res = STR_NULL; /* return value pidf */
-	str err = STR_NULL; /* return value error */
+	str geo = STR_NULL;	 /* return value geolocation uri */
+	str egeo = STR_NULL; /* entire value geolocation uri */
+	str res = STR_NULL;	 /* return value pidf */
+	str err = STR_NULL;	 /* return value error */
 
 	str url = STR_NULL;
 	str did = STR_NULL;
@@ -259,6 +262,7 @@ int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 
 			LM_DBG("parsing From header\n");
 
+			lost_free_string(&idhdr);
 			/* id from From header */
 			idhdr.s = lost_get_from_header(_m, &idhdr.len);
 			if(idhdr.len == 0) {
@@ -280,7 +284,6 @@ int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 	lost_free_held(&held); /* clean up */
 	if(que.len == 0) {
 		LM_ERR("held request document error\n");
-		que.s = NULL;
 		goto err;
 	}
 
@@ -382,8 +385,8 @@ int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 	if(doc == NULL) {
 		LM_WARN("invalid xml document: [%.*s]\n", res.len, res.s);
 		doc = xmlReadMemory(res.s, res.len, 0, NULL,
-				XML_PARSE_NOBLANKS | XML_PARSE_NONET |
-				XML_PARSE_NOCDATA | XML_PARSE_RECOVER);
+				XML_PARSE_NOBLANKS | XML_PARSE_NONET | XML_PARSE_NOCDATA
+						| XML_PARSE_RECOVER);
 		if(doc == NULL) {
 			LM_ERR("xml document recovery failed on: [%.*s]\n", res.len, res.s);
 			goto err;
@@ -408,14 +411,16 @@ int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 
 					LM_DBG("*** node '%s' found\n", cur_node->name);
 
+					lost_free_string(&egeo);
 					/* get the locationUri element */
-					geo.s = lost_get_content(
-							root, (char *)HELD_TYPE_URI, &geo.len);
-					if(geo.len == 0) {
+					egeo.s = lost_get_content(
+							root, (char *)HELD_TYPE_URI, &egeo.len);
+					if(egeo.len == 0) {
 						LM_WARN("%s element not found\n", HELD_TYPE_URI);
-						geo.s = NULL;
+						lost_free_string(&egeo);
 					} else {
-						geo.s = lost_trim_content(geo.s, &geo.len);
+						geo.len = egeo.len;
+						geo.s = lost_trim_content(egeo.s, &geo.len);
 					}
 				}
 				if(xmlStrcmp(cur_node->name, (const xmlChar *)"presence")
@@ -507,7 +512,7 @@ int lost_held_function(struct sip_msg *_m, char *_con, char *_pidf, char *_url,
 	pvurl.flags = PV_VAL_STR;
 	psurl = (pv_spec_t *)_url;
 	psurl->setf(_m, &psurl->pvp, (int)EQ_T, &pvurl);
-	lost_free_string(&geo); /* clean up */
+	lost_free_string(&egeo); /* clean up */
 
 	/* return error code in case of response error */
 	if(err.len > 0) {
@@ -534,15 +539,9 @@ err:
 		xmlFreeDoc(doc);
 	}
 	/* clean up string */
-	if(res.s != NULL && res.len > 0) {
-		lost_free_string(&res);
-	}
-	if(geo.s != NULL && geo.len > 0) {
-		lost_free_string(&geo);
-	}
-	if(err.s != NULL && err.len > 0) {
-		lost_free_string(&err);
-	}
+	lost_free_string(&res);
+	lost_free_string(&egeo);
+	lost_free_string(&err);
 
 	return LOST_CLIENT_ERROR;
 }
@@ -705,8 +704,8 @@ int lost_held_dereference(struct sip_msg *_m, char *_url, char *_pidf,
 	if(doc == NULL) {
 		LM_WARN("invalid xml document: [%.*s]\n", res.len, res.s);
 		doc = xmlReadMemory(res.s, res.len, 0, NULL,
-				XML_PARSE_NOBLANKS | XML_PARSE_NONET |
-				XML_PARSE_NOCDATA | XML_PARSE_RECOVER);
+				XML_PARSE_NOBLANKS | XML_PARSE_NONET | XML_PARSE_NOCDATA
+						| XML_PARSE_RECOVER);
 		if(doc == NULL) {
 			LM_ERR("xml document recovery failed on: [%.*s]\n", res.len, res.s);
 			goto err;
@@ -785,12 +784,8 @@ err:
 		xmlFreeDoc(doc);
 	}
 	/* clean up string */
-	if(res.s != NULL && res.len > 0) {
-		lost_free_string(&res);
-	}
-	if(err.s != NULL && err.len > 0) {
-		lost_free_string(&err);
-	}
+	lost_free_string(&res);
+	lost_free_string(&err);
 
 	return LOST_CLIENT_ERROR;
 }
@@ -1346,27 +1341,13 @@ err:
 	lost_free_geoheader_list(&geolist);
 	lost_free_loc(&loc);
 	/* clean up string */
-	if(oldurl.s != NULL && oldurl.len > 0) {
-		lost_free_string(&oldurl);
-	}
-	if(ret.s != NULL && ret.len > 0) {
-		lost_free_string(&ret);
-	}
-	if(req.s != NULL && req.len > 0) {
-		lost_free_string(&req);
-	}
-	if(rereq.s != NULL && rereq.len > 0) {
-		lost_free_string(&rereq);
-	}
-	if(name.s != NULL && name.len > 0) {
-		lost_free_string(&name);
-	}
-	if(uri.s != NULL && uri.len > 0) {
-		lost_free_string(&uri);
-	}
-	if(err.s != NULL && err.len > 0) {
-		lost_free_string(&err);
-	}
+	lost_free_string(&oldurl);
+	lost_free_string(&ret);
+	lost_free_string(&req);
+	lost_free_string(&rereq);
+	lost_free_string(&name);
+	lost_free_string(&uri);
+	lost_free_string(&err);
 
 	return LOST_CLIENT_ERROR;
 }

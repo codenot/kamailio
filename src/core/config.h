@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -196,10 +198,15 @@
 #define MCOOKIE \
 	"z9hG4bK" /*!< magic cookie for transaction matching as defined in RFC3261 */
 #define MCOOKIE_LEN (sizeof(MCOOKIE) - 1)
+
+/*! \brief Maximum length of extra value in Via-branch parameter */
+#define MAX_BRANCH_XVAL_LEN 8
+
 /*! \brief Maximum length of values appended to Via-branch parameter */
 #define MAX_BRANCH_PARAM_LEN                                                  \
 	(MCOOKIE_LEN                                                              \
 			+ 8 /*int2hex*/ + 1 /*sep*/ + MD5_LEN /* max(int2hex, MD5_LEN) */ \
+			+ 1 /*sep*/ + MAX_BRANCH_XVAL_LEN	  /*extra value*/             \
 			+ 1 /*sep*/ + 8						  /*int2hex*/                 \
 			+ 1 /*extra space, needed by t_calc_branch*/)
 

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -49,5 +51,14 @@
 
 extern str redis_keys;
 extern str redis_schema_path;
+extern int db_redis_with_sentinels;
+extern int use_replicas;
+extern char *db_redis_master_name;
+extern char *db_redis_db_pass;
+typedef enum
+{
+	MS_SET = 0,
+	MS_HASH = 1
+} mapping_struct_type_t;
 
 #endif /* _DB_REDIS_MOD_H */

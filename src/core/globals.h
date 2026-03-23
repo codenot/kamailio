@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -102,13 +104,20 @@ extern int tcp_disable;
 extern enum poll_types tcp_poll_method;
 extern int tcp_max_connections; /* maximum tcp connections, hard limit */
 extern int tls_max_connections; /* maximum tls connections, hard limit */
+extern int ksr_tcp_listen_backlog;
 #endif
 extern int ksr_tcp_accept_hep3;
 extern int ksr_tcp_accept_haproxy;
+extern int ksr_tcp_accept_protocols;
 extern int ksr_tcp_script_mode;
 #ifdef USE_TLS
+extern int tls_connection_match_domain;
 extern int tls_disable;
 extern unsigned short tls_port_no;
+#define KSR_TLS_THREADS_MNONE 0 /* no set of set thread-local variables */
+#define KSR_TLS_THREADS_MTEMP \
+	1 /* set thread-local variables in temp thread; deprecated and unused for 6.x */
+#define KSR_TLS_THREADS_MFORK 2 /* set thread-local variables in at-fork */
 extern int ksr_tls_threads_mode;
 #endif
 #ifdef USE_SCTP
@@ -242,11 +251,15 @@ extern int ksr_local_rport;
 extern int ksr_rpc_exec_delta;
 
 extern int ksr_udp_receiver_mode;
+extern int ksr_msg_clone_extra_size;
+extern int ksr_msg_apply_changes_mode;
 extern int ksr_msg_recv_max_size;
 extern int ksr_tcp_msg_read_timeout;
 extern int ksr_tcp_msg_data_timeout;
 extern int ksr_tcp_accept_iplimit;
+extern int ksr_tcp_main_threads;
 extern int ksr_tcp_check_timer;
+extern int ksr_udp_accept_proxy;
 
 #ifdef USE_DNS_CACHE
 extern int

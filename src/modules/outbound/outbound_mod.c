@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -36,13 +38,10 @@
 #include "../../core/sr_module.h"
 #include "../../core/counters.h"
 #include "../../core/parser/contact/parse_contact.h"
+#include "../../core/parser/parse_expires.h"
 #include "../../core/parser/parse_rr.h"
 #include "../../core/parser/parse_uri.h"
 #include "../../core/parser/parse_supported.h"
-
-#define KSR_RTHREAD_SKIP_P
-#define KSR_RTHREAD_NEED_V
-#include "../../core/rthreads.h"
 
 #include "api.h"
 #include "config.h"
@@ -50,6 +49,19 @@
 MODULE_VERSION
 
 #define OB_KEY_LEN 20
+
+typedef enum check_flow_retcode
+{
+	CHECK_FLOW_ERROR_HEADERS_PARSE = -8,
+	CHECK_FLOW_ERROR_ROUTE_PARSE = -7,
+	CHECK_FLOW_EXPIRED = -6,
+	CHECK_FLOW_NO_TCP_CONNECTION = -5,
+	CHECK_FLOW_ERROR_DECODE = -4,
+	CHECK_FLOW_ERROR_NO_FLOW_TOKEN = -3,
+	CHECK_FLOW_ERROR_URI_NOT_MYSELF = -2,
+	CHECK_FLOW_NO_ROUTE_HEADER = -1,
+	CHECK_FLOW_SUCCESS = 1
+} check_flow_retcode_t;
 
 static int mod_init(void);
 static void destroy(void);
@@ -59,29 +71,39 @@ static unsigned int ob_force_no_flag = (unsigned int)-1;
 static str ob_key = {0, 0};
 static str flow_token_secret = {0, 0};
 
+static int w_check_flow_token(struct sip_msg *msg, char *p1, char *p2);
+
+/* clang-format off */
 static cmd_export_t cmds[] = {
-		{"bind_ob", (cmd_function)bind_ob, 1, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};
+	{"bind_ob", (cmd_function)bind_ob, 1, 0, 0, 0},
+	{"check_flow_token", (cmd_function)w_check_flow_token, 0, 0, 0, REQUEST_ROUTE},
+	{0, 0, 0, 0, 0, 0}
+};
 
 static param_export_t params[] = {
-		{"force_outbound_flag", PARAM_INT, &ob_force_flag},
-		{"force_no_outbound_flag", PARAM_INT, &ob_force_no_flag},
-		{"flow_token_secret", PARAM_STRING, &flow_token_secret}, {0, 0, 0}};
+	{"force_outbound_flag", PARAM_INT, &ob_force_flag},
+	{"force_no_outbound_flag", PARAM_INT, &ob_force_no_flag},
+	{"flow_token_secret", PARAM_STR, &flow_token_secret},
+	{0, 0, 0}
+};
 
 struct module_exports exports = {
-		"outbound", DEFAULT_DLFLAGS, /* dlopen flags */
-		cmds,						 /* exported functions */
-		params,						 /* exported parameters */
-		0,							 /* exported·RPC·methods */
-		0,							 /* exported pseudo-variables */
-		0,							 /* response·function */
-		mod_init,					 /* module initialization function */
-		0,							 /* per-child initialization function */
-		destroy						 /* destroy function */
+	"outbound",
+	DEFAULT_DLFLAGS,    /* dlopen flags */
+	cmds,               /* exported functions */
+	params,             /* exported parameters */
+	0,                  /* RPC method exports */
+	0,                  /* exported pseudo-variables */
+	0,                  /* response handling function */
+	mod_init,           /* module initialization function */
+	0,                  /* per-child init function */
+	destroy             /* module destroy function */
 };
+/* clang-format on */
 
 static void mod_init_openssl(void)
 {
-	if(flow_token_secret.s) {
+	if(flow_token_secret.s && flow_token_secret.len > 0) {
 		assert(ob_key.len == SHA_DIGEST_LENGTH);
 		LM_DBG("flow_token_secret mod param set. use persistent ob_key");
 #if OPENSSL_VERSION_NUMBER < 0x030000000L
@@ -118,11 +140,7 @@ static int mod_init(void)
 	}
 	ob_key.len = OB_KEY_LEN;
 
-#if OPENSSL_VERSION_NUMBER < 0x010101000L
 	mod_init_openssl();
-#else
-	run_threadV(mod_init_openssl);
-#endif
 
 	if(cfg_declare("outbound", outbound_cfg_def, &default_outbound_cfg,
 			   cfg_sizeof(outbound), &outbound_cfg)) {
@@ -179,15 +197,25 @@ int encode_flow_token(str *flow_token, struct receive_info *rcv)
 		return -1;
 	}
 
+	/* By encoding the bind address into the flow token as the destination
+	   address, we make sure that we'll still be able to find the socket when
+	   decoding it even if there's an haproxy in front */
+	struct ip_addr dst_ip = rcv->dst_ip;
+	unsigned short dst_port = rcv->dst_port;
+	if(rcv->bind_address) {
+		dst_ip = rcv->bind_address->address;
+		dst_port = rcv->bind_address->port_no;
+	}
+
 	/* Encode protocol information */
 	unenc_flow_token[pos++] =
-			(rcv->dst_ip.af == AF_INET6 ? 0x80 : 0x00) | rcv->proto;
+			(dst_ip.af == AF_INET6 ? 0x80 : 0x00) | rcv->proto;
 
 	/* Encode destination address */
-	for(i = 0; i < (rcv->dst_ip.af == AF_INET6 ? 16 : 4); i++)
-		unenc_flow_token[pos++] = rcv->dst_ip.u.addr[i];
-	unenc_flow_token[pos++] = (rcv->dst_port >> 8) & 0xff;
-	unenc_flow_token[pos++] = rcv->dst_port & 0xff;
+	for(i = 0; i < (dst_ip.af == AF_INET6 ? 16 : 4); i++)
+		unenc_flow_token[pos++] = dst_ip.u.addr[i];
+	unenc_flow_token[pos++] = (dst_port >> 8) & 0xff;
+	unenc_flow_token[pos++] = dst_port & 0xff;
 
 	/* Encode source address */
 	for(i = 0; i < (rcv->src_ip.af == AF_INET6 ? 16 : 4); i++)
@@ -313,6 +341,24 @@ static int use_outbound_register(struct sip_msg *msg)
 			LM_ERR("parsing Contact: header body\n");
 			return 0;
 		}
+
+		if(((contact_body_t *)msg->contact->parsed)->star) {
+			if(!msg->expires) {
+				LM_ERR("absent Expires header\n");
+				return 0;
+			}
+			if(!msg->expires->parsed && parse_expires(msg->expires) < 0) {
+				LM_ERR("parsing Expires: header body\n");
+				return 0;
+			}
+			if(((exp_body_t *)msg->expires->parsed)->val == 0) {
+				LM_DBG("found REGISTER with * in Contact: header body and "
+					   "Expires "
+					   ": 0 - outbound used\n");
+				return 1;
+			}
+		}
+
 		contact = ((contact_body_t *)msg->contact->parsed)->contacts;
 		if(!contact) {
 			LM_ERR("empty Contact:\n");
@@ -482,4 +528,78 @@ int bind_ob(struct ob_binds *pxb)
 	pxb->use_outbound = use_outbound;
 
 	return 0;
+}
+
+int check_flow_token(struct sip_msg *msg)
+{
+	struct hdr_field *hdr;
+	struct sip_uri puri;
+	rr_t *rt;
+	str uri;
+	int ret;
+	struct receive_info *rcv = NULL;
+	tcp_connection_t *con = NULL;
+
+	switch(has_route_header(msg)) {
+		case 1:
+			LM_DBG("there is no Route HF\n");
+			return CHECK_FLOW_NO_ROUTE_HEADER;
+		case -1:
+			LM_DBG("cannot parse headers\n");
+			return CHECK_FLOW_ERROR_HEADERS_PARSE;
+		case -2:
+			LM_DBG("cannot parse Route HF\n");
+			return CHECK_FLOW_ERROR_ROUTE_PARSE;
+	}
+
+	hdr = msg->route;
+	rt = (rr_t *)hdr->parsed;
+	uri = rt->nameaddr.uri;
+
+	if(parse_uri(uri.s, uri.len, &puri) < 0) {
+		LM_ERR("failed to parse the first route URI (%.*s)\n", uri.len,
+				ZSW(uri.s));
+		return CHECK_FLOW_ERROR_ROUTE_PARSE;
+	}
+
+	if(!check_self_iuser(&puri, NULL)) {
+		LM_DBG("Route header uri is not my self\n");
+		return CHECK_FLOW_ERROR_URI_NOT_MYSELF;
+	}
+
+
+	LM_DBG("topmost route URI: '%.*s' is me\n", uri.len, ZSW(uri.s));
+	ret = decode_flow_token(msg, &rcv, puri.user);
+
+	if(ret == -2) {
+		LM_DBG("no flow token found\n");
+		return CHECK_FLOW_ERROR_NO_FLOW_TOKEN;
+	} else if(ret == -1) {
+		LM_DBG("failed to decode flow token\n");
+		return CHECK_FLOW_ERROR_DECODE;
+	} else if(rcv->proto == PROTO_TCP || rcv->proto == PROTO_TLS
+			  || rcv->proto == PROTO_WS || rcv->proto == PROTO_WSS) {
+		con = tcpconn_get(0, &rcv->src_ip, rcv->src_port, NULL, 0);
+
+		if(!con) {
+			LM_DBG("TCP connection to %s:%d does not exists\n",
+					ip_addr2a(&rcv->src_ip), rcv->src_port);
+			return CHECK_FLOW_NO_TCP_CONNECTION;
+		}
+		tcpconn_put(con);
+		return CHECK_FLOW_SUCCESS;
+	} else if(rcv->proto == PROTO_UDP) {
+		return CHECK_FLOW_SUCCESS;
+	} else {
+		LM_DBG("not supported proto: %d\n", rcv->proto);
+		return CHECK_FLOW_ERROR_DECODE;
+	}
+}
+
+/**
+ * wrapper for check_flow_token(msg)
+ */
+static int w_check_flow_token(struct sip_msg *msg, char *p1, char *p2)
+{
+	return check_flow_token(msg);
 }

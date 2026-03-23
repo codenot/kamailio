@@ -105,9 +105,9 @@ INSTALL_FLAVOUR=$(FLAVOUR)
 
 # version number
 VERSION = 6
-PATCHLEVEL = 0
+PATCHLEVEL = 2
 SUBLEVEL =  0
-EXTRAVERSION = -dev2
+EXTRAVERSION = -dev0
 
 # memory manager switcher
 # 0 - f_malloc (fast malloc)
@@ -220,8 +220,12 @@ LIBDL="-ldl"
 endif
 
 ifeq ($(LIBSSL_SET_MUTEX_SHARED), 1)
-CC_PMUTEX_OPTS = -pthread -DKSR_PTHREAD_MUTEX_SHARED
-LD_PMUTEX_OPTS = -pthread -rdynamic $(LIBDL) -Wl,-Bsymbolic-functions
+CC_PMUTEX_OPTS = -DKSR_PTHREAD_MUTEX_SHARED
+ifeq ($(OS), darwin)
+LD_PMUTEX_OPTS = -rdynamic $(LIBDL)
+else
+LD_PMUTEX_OPTS = -rdynamic $(LIBDL) -Wl,-Bsymbolic-functions
+endif
 else
 CC_PMUTEX_OPTS =
 LD_PMUTEX_OPTS =
@@ -287,28 +291,28 @@ ifneq (,$(findstring gcc, $(CC_LONGVER)))
 	CC_SHORTVER:=$(shell echo "$(CC_VER)" | cut -d" " -f 2| \
 				 sed -e 's/[^0-9]*-\(.*\)/\1/'| \
 				 sed -e 's/2\.9.*/2.9x/' \
-					-e 's/3\.[0-3]\..*/3.0/' \
-					-e 's/3\.[0-3]/3.0/' \
-					-e 's/3\.[4-9]\..*/3.4/' \
-					-e 's/3\.[4-9]/3.4/' \
-					-e 's/4\.[0-1]\..*/4.x/' \
-					-e 's/4\.[0-1]/4.x/' \
-					-e 's/4\.[2-4]\..*/4.2+/' \
-					-e 's/4\.[2-4]$$/4.2+/' \
-					-e 's/4\.[5-9]\..*/4.5+/' \
-					-e 's/4\.[5-9]$$/4.5+/' \
-					-e 's/5\.[0-9]\..*/5.0+/' \
-					-e 's/5\.[0-9]$$/5.0+/' \
-					-e 's/6\.[0-9]\..*/6.0+/' \
-					-e 's/6\.[0-9]$$/6.0+/' \
-					-e 's/7\.[0-9]\..*/7.0+/' \
-					-e 's/7\.[0-9]$$/7.0+/' \
-					-e 's/8\.[0-9]\..*/8.0+/' \
-					-e 's/8\.[0-9]$$/8.0+/' \
-					-e 's/9\.[0-9]\..*/9.0+/' \
-					-e 's/9\.[0-9]$$/9.0+/' \
-					-e 's/1[0-4]\.[0-9]\..*/9.0+/' \
-					-e 's/1[0-4]\.[0-9]$$/9.0+/')
+					-e 's/^3\.[0-3]\..*/3.0/' \
+					-e 's/^3\.[0-3]/3.0/' \
+					-e 's/^3\.[4-9]\..*/3.4/' \
+					-e 's/^3\.[4-9]/3.4/' \
+					-e 's/^4\.[0-1]\..*/4.x/' \
+					-e 's/^4\.[0-1]/4.x/' \
+					-e 's/^4\.[2-4]\..*/4.2+/' \
+					-e 's/^4\.[2-4]$$/4.2+/' \
+					-e 's/^4\.[5-9]\..*/4.5+/' \
+					-e 's/^4\.[5-9]$$/4.5+/' \
+					-e 's/^5\.[0-9]\..*/5.0+/' \
+					-e 's/^5\.[0-9]$$/5.0+/' \
+					-e 's/^6\.[0-9]\..*/6.0+/' \
+					-e 's/^6\.[0-9]$$/6.0+/' \
+					-e 's/^7\.[0-9]\..*/7.0+/' \
+					-e 's/^7\.[0-9]$$/7.0+/' \
+					-e 's/^8\.[0-9]\..*/8.0+/' \
+					-e 's/^8\.[0-9]$$/8.0+/' \
+					-e 's/^9\.[0-9]\..*/9.0+/' \
+					-e 's/^9\.[0-9]$$/9.0+/' \
+					-e 's/^1[0-5]\.[0-9]\..*/9.0+/' \
+					-e 's/^1[0-5]\.[0-9]$$/9.0+/')
 ifeq (,$(strip $(filter-out 3.0 3.4 4.x 4.2+ 4.5+ 5.0+ 6.0+ 7.0+ 8.0+ 9.0+,$(CC_SHORTVER))))
 	# dependencies can be generated on-the-fly while compiling *.c
 	CC_MKDEP_OPTS=-MMD -MP
@@ -365,8 +369,8 @@ sparc_macros= __sparc__ __sparc __sparcv8
 sparc64_macros= __sparcv9 __sparc_v9__
 
 arm_macros= __arm__ __thumb__
-arm8_macros= __ARM_ARCH_8__
-arm8a_macros= __ARM_ARCH_8A__
+arm8_macros= __ARM_ARCH_8__ __ARM_ARCH_8
+arm8a_macros= __ARM_ARCH_8A__ __ARM_ARCH_8A
 arm7_macros= __ARM_ARCH_7__
 arm6_macros= __ARM_ARCH_6__
 
@@ -492,7 +496,7 @@ endif
 
 ifeq ($(OS), freebsd)
 	doc_dir = share/doc/$(MAIN_NAME)/
-	man_dir = man/
+	man_dir = share/man/
 	data_dir = share/$(MAIN_NAME)/
 	LOCALBASE ?= /usr/local
 endif
@@ -884,8 +888,13 @@ endif
 
 ifeq ($(ARCH), aarch64)
 	use_fast_lock=yes
-	C_DEFS+=-DNOSMP # memory barriers not implemented for arm
+	C_DEFS+=-DCC_GCC_LIKE_ASM
 endif
+
+ifeq ($(ARCH), arm64)
+	C_DEFS+=-DCC_GCC_LIKE_ASM
+endif
+
 
 ifeq ($(ARCH), ppc)
 	use_fast_lock=yes
@@ -922,8 +931,8 @@ ifeq ($(use_fast_lock), yes)
 	found_lock_method=yes
 endif
 
-CFLAGS=-g
-LDFLAGS=-g
+CFLAGS=-g -pthread
+LDFLAGS=-g -pthread
 C_INCLUDES=
 # setting CFLAGS
 ifeq ($(mode), release)
@@ -1995,7 +2004,6 @@ ifeq ($(OS), freebsd)
 	ifneq ($(found_lock_method), yes)
 		C_DEFS+= -DUSE_PTHREAD_MUTEX  # try pthread sems
 		found_lock_method=yes
-		LIBS+= -pthread
 	endif
 	# check for ver >= 4.1
 	ifeq ($(shell [ $(OSREL_N) -gt 4001 ] && echo has_kqueue), has_kqueue)
@@ -2017,7 +2025,6 @@ ifeq ($(OS), dragonfly)
 	ifneq ($(found_lock_method), yes)
 		C_DEFS+= -DUSE_PTHREAD_MUTEX  # try pthread sems
 		found_lock_method=yes
-		LIBS+= -pthread   #dlopen is in libc
 	else
 		LIBS=   #dlopen is in libc
 	endif

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -45,13 +47,17 @@ typedef struct to_param
 } to_param_t;
 
 
+#define TBS_URI_ENCLOSED 1	 /*!< URI is enclodes in angle brackets */
+#define TBS_DISPLAY_QUOTED 2 /*!< Display name is quoted */
+
 typedef struct to_body
 {
-	int error;	   /*!< Error code */
-	str body;	   /*!< The whole header field body */
-	str uri;	   /*!< URI */
-	str display;   /*!< Display Name */
-	str tag_value; /*!< Value of tag */
+	int error;			/*!< Error code */
+	str body;			/*!< The whole header field body */
+	str uri;			/*!< URI */
+	str display;		/*!< Display Name */
+	str tag_value;		/*!< Value of tag */
+	unsigned int style; /*!< Styles for the fields */
 	struct sip_uri parsed_uri;
 	struct to_param *param_lst;	 /*!< Linked list of parameters */
 	struct to_param *last_param; /*!< Last parameter in the list */

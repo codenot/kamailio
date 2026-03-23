@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -99,6 +101,12 @@ extern str pres_xavp_cfg;
 extern int pres_retrieve_order;
 extern str pres_retrieve_order_by;
 extern int pres_enable_dmq;
+extern int pres_enable_pres_dmq;
+extern int pres_enable_pres_sync_dmq;
+extern int pres_enable_subs_dmq;
+extern int pres_enable_subs_sync_dmq;
+extern int pres_skip_notify_dmq;
+extern str pres_default_socket;
 extern int pres_subs_respond_200;
 
 extern int phtable_size;

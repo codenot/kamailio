@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -222,6 +224,9 @@ void free_cell_helper(
 		}
 		dns_srv_handle_put_shm_unsafe(&dead_cell->uac[i].dns_h);
 #endif
+		if(unlikely(dead_cell->uac[i].dst_uri.s)) {
+			shm_free_unsafe(dead_cell->uac[i].dst_uri.s);
+		}
 		if(unlikely(dead_cell->uac[i].path.s)) {
 			shm_free_unsafe(dead_cell->uac[i].path.s);
 		}
@@ -273,7 +278,7 @@ void free_cell_helper(
 }
 
 
-static inline void init_synonym_id(struct sip_msg *p_msg, char *hash)
+static inline void init_synonym_id(struct sip_msg *p_msg, char *hashval)
 {
 	int size;
 	char *c;
@@ -284,7 +289,7 @@ static inline void init_synonym_id(struct sip_msg *p_msg, char *hash)
 		 * calculated out of header-fields forming
 		 * transaction key
 		*/
-		char_msg_val(p_msg, hash);
+		char_msg_val(p_msg, hashval);
 	} else {
 		/* char value for a UAC transaction is created
 		 * randomly -- UAC is an originating stateful element
@@ -293,7 +298,7 @@ static inline void init_synonym_id(struct sip_msg *p_msg, char *hash)
 		*/
 		/* HACK : not long enough */
 		myrand = kam_rand();
-		c = hash;
+		c = hashval;
 		size = MD5_LEN;
 		memset(c, '0', size);
 		int2reverse_hex(&c, &size, myrand);

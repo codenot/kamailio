@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -334,7 +336,6 @@ int resolve_select(select_t *s)
 				break;
 			default:
 				BUG("Unable to resolve select at level %d\n", param_idx);
-				break;
 				break;
 		}
 		goto not_found;

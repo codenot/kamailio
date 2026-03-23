@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -79,6 +81,9 @@ struct subscription *search_shtable(shtable_t htable, str callid, str to_tag,
 int insert_shtable(
 		shtable_t htable, unsigned int hash_code, struct subscription *subs);
 
+int replace_shtable(
+		shtable_t htable, unsigned int hash_code, struct subscription *subs);
+
 int delete_shtable(
 		shtable_t htable, unsigned int hash_code, struct subscription *subs);
 
@@ -98,6 +103,9 @@ typedef struct subscription *(*search_shtable_t)(shtable_t htable, str callid,
 		str to_tag, str from_tag, unsigned int hash_code);
 
 typedef int (*insert_shtable_t)(
+		shtable_t htable, unsigned int hash_code, struct subscription *subs);
+
+typedef int (*replace_shtable_t)(
 		shtable_t htable, unsigned int hash_code, struct subscription *subs);
 
 typedef int (*delete_shtable_t)(

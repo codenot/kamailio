@@ -40,6 +40,8 @@
 #define TPS_CONTACT_MODE_SKEYUSER 0
 #define TPS_CONTACT_MODE_RURIUSER 1
 #define TPS_CONTACT_MODE_XAVPUSER 2
+#define TPS_CONTACT_MODE_XAVPHOST 3
+
 
 #define TPS_DBU_CONTACT (1 << 0)
 #define TPS_DBU_RPLATTRS (1 << 1)
@@ -48,7 +50,7 @@
 #define TPS_DBU_TIME (1 << 4)
 #define TPS_DBU_ALL (0xffffffff)
 
-#define TPS_DATA_SIZE 8192
+#define TPS_DATA_SIZE 16384
 typedef struct tps_data
 {
 	char cbuf[TPS_DATA_SIZE];

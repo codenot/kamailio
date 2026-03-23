@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -33,6 +35,7 @@
 #include "../../core/config.h"
 #include "../../core/parser/parser_f.h"
 #include "../../core/parser/parse_to.h"
+#include "../../core/parser/parse_from.h"
 #include "../../core/ut.h"
 #include "../../core/trim.h"
 #include "../../core/srapi.h"
@@ -70,12 +73,15 @@
 		(_d) += (_len);             \
 	} while(0)
 
+extern int tm_headers_mode;
+extern int tm_local_ack_branch_mode;
 
 /* Build a local request based on a previous request; main
  * customers of this function are local ACK and local CANCEL
  */
 char *build_local(struct cell *Trans, unsigned int branch, unsigned int *len,
-		char *method, int method_len, str *to, struct cancel_reason *reason)
+		char *method, int method_len, str *to, sip_msg_t *imsg,
+		struct cancel_reason *reason)
 {
 	char *cancel_buf, *p, *via;
 	unsigned int via_len;
@@ -184,6 +190,28 @@ char *build_local(struct cell *Trans, unsigned int branch, unsigned int *len,
 			LM_BUG("unhandled reason cause %d\n", reason->cause);
 	}
 	*len += reason_len;
+	if(imsg != NULL && (tm_headers_mode & TM_CANCEL_HEADERS_COPY)) {
+		for(hdr = imsg->headers; hdr; hdr = hdr->next) {
+			switch(hdr->type) {
+				case HDR_CALLID_T:
+				case HDR_CSEQ_T:
+				case HDR_VIA_T:
+				case HDR_TO_T:
+				case HDR_FROM_T:
+				case HDR_ROUTE_T:
+				case HDR_MAXFORWARDS_T:
+				case HDR_REQUIRE_T:
+				case HDR_PROXYREQUIRE_T:
+				case HDR_CONTENTLENGTH_T:
+				case HDR_REASON_T:
+				case HDR_EOH_T:
+					/* skip these headers - they were added already */
+					break;
+				default:
+					*len += hdr->len;
+			}
+		}
+	}
 	*len += CRLF_LEN; /* end of msg. */
 
 	cancel_buf = shm_malloc(*len + 1);
@@ -255,6 +283,29 @@ char *build_local(struct cell *Trans, unsigned int branch, unsigned int *len,
 			}
 		}
 	}
+	if(imsg != NULL && (tm_headers_mode & TM_CANCEL_HEADERS_COPY)) {
+		for(hdr = imsg->headers; hdr; hdr = hdr->next) {
+			switch(hdr->type) {
+				case HDR_CALLID_T:
+				case HDR_CSEQ_T:
+				case HDR_VIA_T:
+				case HDR_TO_T:
+				case HDR_FROM_T:
+				case HDR_ROUTE_T:
+				case HDR_MAXFORWARDS_T:
+				case HDR_REQUIRE_T:
+				case HDR_PROXYREQUIRE_T:
+				case HDR_CONTENTLENGTH_T:
+				case HDR_REASON_T:
+				case HDR_EOH_T:
+					/* skip these headers - they were added already */
+					break;
+				default:
+					append_str(p, hdr->name.s, hdr->len);
+			}
+		}
+	}
+
 	append_str(p, CRLF, CRLF_LEN); /* msg. end */
 	*p = 0;
 
@@ -274,7 +325,7 @@ error:
  */
 char *build_local_reparse(tm_cell_t *Trans, unsigned int branch,
 		unsigned int *len, char *method, int method_len, str *to,
-		struct cancel_reason *reason)
+		sip_msg_t *imsg, struct cancel_reason *reason)
 {
 	char *invite_buf, *invite_buf_end;
 	char *cancel_buf;
@@ -288,6 +339,7 @@ char *build_local_reparse(tm_cell_t *Trans, unsigned int branch,
 	int hadded = 0;
 	sr_cfgenv_t *cenv = NULL;
 	hdr_flags_t hdr_flags = 0;
+	hdr_field_t *hf = NULL;
 
 	invite_buf = Trans->uac[branch].request.buffer;
 	invite_len = Trans->uac[branch].request.buffer_len;
@@ -345,6 +397,9 @@ char *build_local_reparse(tm_cell_t *Trans, unsigned int branch,
 	to_len = to ? to->len : 0;
 	cancel_buf_len = invite_len + to_len + reason_len;
 
+	if((imsg != NULL) && (tm_headers_mode & TM_CANCEL_HEADERS_COPY)) {
+		cancel_buf_len += imsg->len;
+	}
 	cancel_buf = shm_malloc(sizeof(char) * cancel_buf_len);
 	if(!cancel_buf) {
 		SHM_MEM_ERROR;
@@ -497,6 +552,29 @@ char *build_local_reparse(tm_cell_t *Trans, unsigned int branch,
 							append_str(d, hdr->name.s, hdr->len);
 							if(likely(hdr == reas_last))
 								break;
+						}
+					}
+				}
+				if((imsg != NULL)
+						&& (tm_headers_mode & TM_CANCEL_HEADERS_COPY)) {
+					for(hf = imsg->headers; hf; hf = hf->next) {
+						switch(hf->type) {
+							case HDR_CALLID_T:
+							case HDR_CSEQ_T:
+							case HDR_VIA_T:
+							case HDR_TO_T:
+							case HDR_FROM_T:
+							case HDR_ROUTE_T:
+							case HDR_MAXFORWARDS_T:
+							case HDR_REQUIRE_T:
+							case HDR_PROXYREQUIRE_T:
+							case HDR_CONTENTLENGTH_T:
+							case HDR_REASON_T:
+							case HDR_EOH_T:
+								/* skip these headers - they were added already */
+								break;
+							default:
+								append_str(d, hf->name.s, hf->len);
 						}
 					}
 				}
@@ -675,6 +753,26 @@ static inline int get_contact_uri(struct sip_msg *msg, str *uri)
 }
 
 /**
+ * reverse rte list
+ */
+static inline rte_t *tm_reverse_rte_list(rte_t *head)
+{
+	rte_t *prev = NULL;
+	rte_t *current = NULL;
+	rte_t *next = NULL;
+
+	current = head;
+	while(current != NULL) {
+		next = current->next;
+		current->next = prev;
+		prev = current;
+		current = next;
+	}
+
+	return prev;
+}
+
+/**
  * Extract route set from the message (out of Record-Route, if reply, OR
  * Route, if request).
  * The route set is returned into the "UAC-format" (keep order for Rs, reverse
@@ -684,7 +782,7 @@ static inline int get_uac_rs(sip_msg_t *msg, int is_req, struct rte **rtset)
 {
 	struct hdr_field *ptr;
 	rr_t *p, *new_p;
-	struct rte *t, *head, *old_head;
+	struct rte *t, *head;
 
 	head = 0;
 	for(ptr = is_req ? msg->route : msg->record_route; ptr; ptr = ptr->next) {
@@ -734,14 +832,7 @@ static inline int get_uac_rs(sip_msg_t *msg, int is_req, struct rte **rtset)
 	if(is_req) {
 		/* harvesting the R/RR HF above inserts at head, which suites RRs (as
 		 * they must be reversed, anyway), but not Rs => reverse once more */
-		old_head = head;
-		head = 0;
-		while(old_head) {
-			t = old_head;
-			old_head = old_head->next;
-			t->next = head;
-			head = t;
-		}
+		head = tm_reverse_rte_list(head);
 	}
 
 	*rtset = head;
@@ -750,7 +841,6 @@ err:
 	free_rte_list(head);
 	return -1;
 }
-
 
 static inline unsigned short uri2port(const struct sip_uri *puri)
 {
@@ -1135,6 +1225,7 @@ char *build_dlg_ack(struct sip_msg *rpl, struct cell *Trans,
 	str next_hop;
 	str body_len;
 	str _to, *to = &_to;
+	struct dest_info *orig_dst = &Trans->uac[branch].request.dst;
 #ifdef USE_DNS_FAILOVER
 	struct dns_srv_handle dns_h;
 #endif
@@ -1193,7 +1284,7 @@ char *build_dlg_ack(struct sip_msg *rpl, struct cell *Trans,
 	switch(cfg_get(tm, tm_cfg, local_ack_mode)) {
 		case 1:
 			/* send the local 200 ack to the same dst as the corresp. invite*/
-			*dst = Trans->uac[branch].request.dst;
+			*dst = *orig_dst;
 			break;
 		case 2:
 			/* send the local 200 ack to the same dst as the 200 reply source*/
@@ -1203,7 +1294,8 @@ char *build_dlg_ack(struct sip_msg *rpl, struct cell *Trans,
 		case 0:
 		default:
 			/* rfc conformant behaviour: use the next_hop determined from the
-			 * contact and the route set */
+			 * contact and the route set - but still apply a potentially forced
+			 * send_socket (taken from the original/ACK'ed request) */
 #ifdef USE_DNS_FAILOVER
 			if(cfg_get(core, core_cfg, use_dns_failover)) {
 				dns_srv_handle_init(&dns_h);
@@ -1228,11 +1320,17 @@ char *build_dlg_ack(struct sip_msg *rpl, struct cell *Trans,
 				goto error;
 			}
 #endif /* USE_DNS_FAILOVER */
+			if(orig_dst->send_flags.f & SND_F_FORCE_SOCKET) {
+				dst->send_sock = orig_dst->send_sock;
+				dst->proto = orig_dst->proto;
+				dst->send_flags = orig_dst->send_flags;
+				dst->id = orig_dst->id;
+			}
 			break;
 	}
 
 	/* via */
-	if(!t_calc_branch(Trans, branch, branch_buf, &branch_len))
+	if(!t_calc_branch_ack(Trans, rpl, branch, branch_buf, &branch_len))
 		goto error;
 	branch_str.s = branch_buf;
 	branch_str.len = branch_len;
@@ -1246,7 +1344,7 @@ char *build_dlg_ack(struct sip_msg *rpl, struct cell *Trans,
 
 	/* headers */
 	*len += Trans->from_hdr.len + Trans->callid_hdr.len + to->len
-			+ Trans->cseq_hdr_n.len + 1 + ACK_LEN + +MAXFWD_HEADER_LEN
+			+ Trans->cseq_hdr_n.len + 1 + ACK_LEN + MAXFWD_HEADER_LEN
 			+ CRLF_LEN;
 
 	/* copy'n'paste Route headers */
@@ -1456,11 +1554,15 @@ static inline char *print_to(
 		char *w, dlg_t *dialog, struct cell *t, int bracket)
 {
 	t->to_hdr.s = w;
-	t->to_hdr.len =
-			TO_LEN + dialog->rem_uri.len + CRLF_LEN
-			+ (((dialog->rem_uri.s[dialog->rem_uri.len - 1] != '>')) ? 2 : 0);
+	t->to_hdr.len = TO_LEN + dialog->rem_dname.len
+					+ ((dialog->rem_dname.len > 0) ? 1 : 0)
+					+ dialog->rem_uri.len + ((bracket) ? 2 : 0) + CRLF_LEN;
 
 	memapp(w, TO, TO_LEN);
+	if(dialog->rem_dname.len > 0) {
+		memapp(w, dialog->rem_dname.s, dialog->rem_dname.len);
+		memapp(w, " ", 1);
+	}
 	if(bracket)
 		memapp(w, "<", 1);
 	memapp(w, dialog->rem_uri.s, dialog->rem_uri.len);
@@ -1485,11 +1587,15 @@ static inline char *print_from(
 		char *w, dlg_t *dialog, struct cell *t, int bracket)
 {
 	t->from_hdr.s = w;
-	t->from_hdr.len =
-			FROM_LEN + dialog->loc_uri.len + CRLF_LEN
-			+ ((dialog->loc_uri.s[dialog->loc_uri.len - 1] != '>') ? 2 : 0);
+	t->from_hdr.len = FROM_LEN + dialog->loc_dname.len
+					  + ((dialog->loc_dname.len > 0) ? 1 : 0)
+					  + dialog->loc_uri.len + ((bracket) ? 2 : 0) + CRLF_LEN;
 
 	memapp(w, FROM, FROM_LEN);
+	if(dialog->loc_dname.len > 0) {
+		memapp(w, dialog->loc_dname.s, dialog->loc_dname.len);
+		memapp(w, " ", 1);
+	}
 	if(bracket)
 		memapp(w, "<", 1);
 	memapp(w, dialog->loc_uri.s, dialog->loc_uri.len);
@@ -1577,6 +1683,7 @@ char *build_uac_req(str *method, str *headers, str *body, dlg_t *dialog,
 	str content_length, cseq, via;
 	unsigned int maxfwd_len;
 	int tbracket, fbracket;
+	int tdname = 0, fdname = 0;
 	str fromtag = STR_NULL;
 	str loc_tag = STR_NULL;
 
@@ -1626,6 +1733,9 @@ char *build_uac_req(str *method, str *headers, str *body, dlg_t *dialog,
 	} else {
 		tbracket = 1;
 	}
+	if(dialog->rem_dname.len > 0) {
+		tdname = 1;
+	}
 	if((p = q_memrchr(dialog->loc_uri.s, '>', dialog->loc_uri.len)) != NULL) {
 		if((p == dialog->loc_uri.s + dialog->loc_uri.len - 1)
 				|| *(p + 1) == ';') {
@@ -1636,14 +1746,17 @@ char *build_uac_req(str *method, str *headers, str *body, dlg_t *dialog,
 	} else {
 		fbracket = 1;
 	}
+	if(dialog->loc_dname.len > 0) {
+		fdname = 1;
+	}
 
-	*len += TO_LEN + dialog->rem_uri.len
+	*len += TO_LEN + dialog->rem_dname.len + tdname + dialog->rem_uri.len
 			+ (dialog->id.rem_tag.len ? (TOTAG_LEN + dialog->id.rem_tag.len)
 									  : 0)
 			+ CRLF_LEN; /* To */
 	if(tbracket)
 		*len += 2; /* To-URI < > */
-	*len += FROM_LEN + dialog->loc_uri.len
+	*len += FROM_LEN + dialog->loc_dname.len + fdname + dialog->loc_uri.len
 			+ (dialog->id.loc_tag.len ? (FROMTAG_LEN + dialog->id.loc_tag.len)
 									  : 0)
 			+ CRLF_LEN; /* From */
@@ -1698,7 +1811,9 @@ char *build_uac_req(str *method, str *headers, str *body, dlg_t *dialog,
 	/* Server signature */
 	if(server_signature && user_agent_hdr.len > 0) {
 		memapp(w, user_agent_hdr.s, user_agent_hdr.len);
-		memapp(w, CRLF, CRLF_LEN);
+		if(user_agent_hdr.s[user_agent_hdr.len - 1] != '\n') {
+			memapp(w, CRLF, CRLF_LEN);
+		}
 	}
 	if(headers && headers->len > 2) {
 		memapp(w, headers->s, headers->len);
@@ -1723,10 +1838,99 @@ error:
 	return 0;
 }
 
+int t_via_local_branch_val(sip_msg_t *msg, char *sval, char *md5b)
+{
+	int i = 0;
+	int n = 0;
+	str src[6];
+
+	for(i = 0; i < MD5_LEN; i++) {
+		md5b[i] = '0';
+	}
+
+	if(parse_headers(msg,
+			   HDR_VIA_F | HDR_FROM_F | HDR_TO_F | HDR_CALLID_F | HDR_CSEQ_F,
+			   0) < 0
+			|| parse_from_header(msg) < 0 || msg->from == NULL
+			|| msg->from->parsed == NULL || msg->to == NULL
+			|| msg->callid == NULL || msg->cseq == NULL) {
+		LM_ERR("invalid message\n");
+		return -1;
+	}
+
+	src[n] = get_from(msg)->tag_value;
+	n++;
+	if(get_to(msg)->tag_value.s != NULL && get_to(msg)->tag_value.len > 0) {
+		src[n] = get_to(msg)->tag_value;
+		n++;
+	}
+	src[n] = msg->callid->body;
+	n++;
+	if(sval != NULL) {
+		src[n].s = sval;
+		src[n].len = strlen(sval);
+		n++;
+	}
+	src[n] = get_cseq(msg)->number;
+	n++;
+
+	if(msg->via1 != NULL && msg->via1->branch != NULL) {
+		src[n] = msg->via1->branch->value;
+		n++;
+	}
+
+	MD5StringArray(md5b, src, n);
+
+	return 0;
+}
 
 int t_calc_branch(struct cell *t, int b, char *branch, int *branch_len)
 {
-	return branch_builder(t->hash_index, 0, t->md5, b, branch, branch_len);
+	return branch_builder(
+			t->hash_index, 0, t->md5, NULL, b, branch, branch_len);
+}
+
+int t_calc_branch_ack(
+		struct cell *t, sip_msg_t *rpl, int b, char *branch, int *branch_len)
+{
+	char md5b[MD5_LEN + 1];
+	int i = 0;
+	int k = 0;
+
+	if(tm_local_ack_branch_mode == 0) {
+		return branch_builder(
+				t->hash_index, 0, t->md5, NULL, b, branch, branch_len);
+	}
+
+	if(tm_local_ack_branch_mode == 2) {
+		if(t_via_local_branch_val(rpl, "ACK", md5b) == 0) {
+			k = 1;
+		}
+	}
+
+	if(k == 0) {
+		/* tm_local_ack_branch_mode != 2 or t_via_local_branch_val() failed */
+		memcpy(md5b, t->md5, MD5_LEN);
+		md5b[MD5_LEN] = '\0';
+		for(k = 0; k < 4; k++) {
+			i = MD5_LEN - 1 - k;
+			if(md5b[i] >= '0' && md5b[i] < '9') {
+				md5b[i] = md5b[i] + 1;
+			} else if(md5b[i] == '9') {
+				md5b[i] = '0';
+			} else if(md5b[i] >= 'a' && md5b[i] < 'z') {
+				md5b[i] = md5b[i] + 1;
+			} else if(md5b[i] == 'z') {
+				md5b[i] = 'a';
+			} else if(md5b[i] >= 'A' && md5b[i] < 'Z') {
+				md5b[i] = md5b[i] + 1;
+			} else if(md5b[i] == 'z') {
+				md5b[i] = 'A';
+			}
+		}
+	}
+
+	return branch_builder(t->hash_index, 0, md5b, NULL, b, branch, branch_len);
 }
 
 /**
@@ -1739,7 +1943,8 @@ char *build_uac_cancel(str *headers, str *body, struct cell *cancelledT,
 	char branch_buf[MAX_BRANCH_PARAM_LEN];
 	str branch_str;
 	struct hostport hp;
-	str content_length, via;
+	str content_length;
+	str via = STR_NULL;
 
 	LM_DBG("sing FROM=<%.*s>, TO=<%.*s>, CSEQ_N=<%.*s>\n",
 			cancelledT->from_hdr.len, cancelledT->from_hdr.s,
@@ -1778,7 +1983,7 @@ char *build_uac_cancel(str *headers, str *body, struct cell *cancelledT,
 	/* Content Length  */
 	if(print_content_length(&content_length, body) < 0) {
 		LM_ERR("failed to print content-length\n");
-		return 0;
+		goto error01;
 	}
 	/* Content-Length */
 	*len += (body ? (CONTENT_LENGTH_LEN + content_length.len + CRLF_LEN) : 0);

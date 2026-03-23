@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -528,7 +530,7 @@ static char *parse_to_param(char *const buffer, const char *const end,
 						goto error;
 				}
 		} /*switch*/
-	}	  /*for*/
+	} /*for*/
 	if(!(status == F_CR || status == F_LF || status == F_CRLF))
 		saved_status = status;
 
@@ -722,21 +724,25 @@ char *parse_addr_spec(char *const buffer, const char *const end,
 				switch(status) {
 					case START_TO:
 						to_b->body.s = tmp;
+						to_b->style |= TBS_URI_ENCLOSED;
 						status = S_URI_ENCLOSED;
 						break;
 					case DISPLAY_QUOTED:
 						break;
 					case E_DISPLAY_QUOTED:
+						to_b->style |= TBS_URI_ENCLOSED;
 						status = S_URI_ENCLOSED;
 						break;
 					case URI_OR_TOKEN:
 					case DISPLAY_TOKEN:
 						to_b->display.len = tmp - to_b->display.s;
+						to_b->style |= TBS_URI_ENCLOSED;
 						status = S_URI_ENCLOSED;
 						break;
 					case DISPLAY_TOKEN_SP:
 					case MAYBE_URI_END:
 						to_b->display.len = foo - to_b->display.s;
+						to_b->style |= TBS_URI_ENCLOSED;
 						status = S_URI_ENCLOSED;
 						break;
 					case F_CRLF:
@@ -780,6 +786,7 @@ char *parse_addr_spec(char *const buffer, const char *const end,
 					case START_TO:
 						to_b->body.s = tmp;
 						to_b->display.s = tmp;
+						to_b->style |= TBS_DISPLAY_QUOTED;
 						status = DISPLAY_QUOTED;
 						break;
 					case DISPLAY_QUOTED:
@@ -886,7 +893,7 @@ char *parse_addr_spec(char *const buffer, const char *const end,
 						goto error;
 				}
 		} /*char switch*/
-	}	  /*for*/
+	} /*for*/
 
 	/* Reached end of buffer */
 	switch(status) {

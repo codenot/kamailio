@@ -7,6 +7,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -48,11 +50,12 @@ int pvh_str_free(str *s)
 
 int pvh_str_copy(str *dst, str *src, unsigned int max_size)
 {
-	unsigned int src_len = src->len + 1 >= max_size ? max_size - 1 : src->len;
+	unsigned int src_len = 0;
 
 	if(src == NULL || dst == NULL || src->len <= 0)
 		return -1;
 
+	src_len = src->len + 1 >= max_size ? max_size - 1 : src->len;
 	memset(dst->s, 0, dst->len);
 	memcpy(dst->s, src->s, src_len);
 	dst->s[src_len] = '\0';

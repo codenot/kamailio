@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -150,6 +152,7 @@ static inline void send_mail(struct cpl_cmd *cmd)
 		LM_ERR("fork failed: %s\n", strerror(errno));
 		goto error;
 	} else if(pid == 0) {
+		_ksr_is_main = 0;
 		/* child -> close all descriptors excepting pfd[0] */
 		/* 32 is the maximum number of inherited open file descriptors */
 		for(i = 3; i < 32; i++)

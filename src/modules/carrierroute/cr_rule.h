@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -46,7 +48,7 @@ struct route_rule
 	double orig_prob; /*!< The original probability for that rule, only useful when using crc32 hashing */
 	str host;		  /*!< The new target host for the request */
 	int strip; /*!< the number of digits to be stripped off from uri before prepending prefix */
-	str local_prefix; /*!< the pefix to be attached to the new destination */
+	str local_prefix; /*!< the prefix to be attached to the new destination */
 	str local_suffix; /*!< the suffix to be appended to the localpart of the new destination */
 	str comment; /*!< A comment for the route rule */
 	str prefix;	 /*!< The prefix for which the route is valid */

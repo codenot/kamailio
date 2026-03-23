@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <nghttp2/nghttp2.h>
 
 #include "../../core/sr_module.h"
 #include "../../core/dprint.h"
@@ -299,8 +300,14 @@ static int ksr_nghttp2_send_reply(sip_msg_t *msg, str *rcode, str *sbody)
 	int rv;
 	ssize_t writelen;
 	int pipefd[2];
+	char *p;
 
-	_ksr_nghttp2_ctx.rplhdrs_v[0].value = (uint8_t *)rcode->s;
+	p = strndup(rcode->s, rcode->len);
+	if(p == NULL) {
+		SYS_MEM_ERROR;
+		return -1;
+	}
+	_ksr_nghttp2_ctx.rplhdrs_v[0].value = (uint8_t *)p;
 	_ksr_nghttp2_ctx.rplhdrs_v[0].valuelen = rcode->len;
 
 	if(_ksr_nghttp2_ctx.rplhdrs_n == 0) {

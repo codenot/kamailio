@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -25,6 +27,7 @@
 #include "../../core/pvar.h"
 
 #define FO_MAX_FILES 10 /* Maximum number of files */
+#define FO_MAX_PATH_LEN 2048
 
 typedef struct log_message
 {
@@ -58,11 +61,14 @@ typedef struct fo_file_properties
 	str fo_extension;
 	str fo_prefix;
 	int fo_interval_seconds;
+	int fo_requires_rotation;
 	pv_elem_t *fo_prefix_pvs;
 	time_t fo_stored_timestamp;
 	FILE *fo_file_output;
 } fo_file_properties_t;
 
+int fo_file_properties_init(fo_file_properties_t *fp);
 int fo_file_properties_destroy(fo_file_properties_t *fp);
+int fo_file_properties_print(const fo_file_properties_t file_prop);
 
 #endif

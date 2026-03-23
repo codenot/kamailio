@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -61,7 +63,7 @@
 	} while(0)
 #endif // __OS_solaris
 
-#define TIME_STR_BUFFER_SIZE 20
+#define TIME_STR_BUFFER_SIZE 27
 #define TIME_BUFFER_LENGTH 256
 #define TIME_STRING_FORMAT "%Y-%m-%d %H:%M:%S"
 
@@ -143,7 +145,7 @@ int cdr_core2strar(struct dlg_cell *dlg, str *values, int *unused, char *types)
 static db_key_t *db_cdr_keys = NULL;
 static db_val_t *db_cdr_vals = NULL;
 
-/* collect all crd data and write it to a syslog */
+/* collect all cdr data and write it to a database */
 static int db_write_cdr(struct dlg_cell *dialog, struct sip_msg *message)
 {
 	int attr_cnt = 0;
@@ -410,7 +412,10 @@ static int write_cdr(struct dlg_cell *dialog, struct sip_msg *message)
 	return ret;
 }
 
-/* convert a string into a timeval struct */
+/*
+ * convert a string into a timeval struct
+ * supports up to microsecond precision
+ */
 static int string2time(str *time_str, struct timeval *time_value)
 {
 	char *dot_address = NULL;
@@ -448,24 +453,50 @@ static int string2time(str *time_str, struct timeval *time_value)
 	}
 
 	time_value->tv_sec = strtol(zero_terminated_value, (char **)NULL, 10);
-	time_value->tv_usec = strtol(dot_address + 1, (char **)NULL, 10)
-						  * 1000; // restore usec precision
+	switch(cdr_duration_mode) {
+		case 0:
+			time_value->tv_usec = (long int)0;
+			break;
+		case 1:
+			time_value->tv_usec =
+					strtol(dot_address + 1, (char **)NULL, 10) * 1000;
+			break;
+		case 2:
+			time_value->tv_usec = strtol(dot_address + 1, (char **)NULL, 10);
+			break;
+	}
 	return 0;
 }
 
-/* convert a timeval struct into a string */
+/*
+ * convert a timeval struct into a string
+ * supports up to microsecond precision
+ */
 static int time2string(struct timeval *time_value, str *time_str)
 {
-	int buffer_length;
+	int buffer_length = -1;
 
 	if(!time_value) {
 		LM_ERR("time_value or any of its fields is empty!\n");
 		return -1;
 	}
 
-	buffer_length = snprintf(time_buffer, TIME_BUFFER_LENGTH, "%ld%c%03d",
-			(long int)time_value->tv_sec, time_separator,
-			(int)(time_value->tv_usec / 1000));
+	switch(cdr_duration_mode) {
+		case 0:
+			buffer_length = snprintf(time_buffer, TIME_BUFFER_LENGTH, "%ld%c0",
+					(long int)time_value->tv_sec, time_separator);
+			break;
+		case 1:
+			buffer_length = snprintf(time_buffer, TIME_BUFFER_LENGTH,
+					"%ld%c%03d", (long int)time_value->tv_sec, time_separator,
+					(int)(time_value->tv_usec / 1000));
+			break;
+		case 2:
+			buffer_length = snprintf(time_buffer, TIME_BUFFER_LENGTH,
+					"%ld%c%06ld", (long int)time_value->tv_sec, time_separator,
+					(long int)time_value->tv_usec);
+			break;
+	}
 
 	if(buffer_length < 0) {
 		LM_ERR("failed to write to buffer.\n");

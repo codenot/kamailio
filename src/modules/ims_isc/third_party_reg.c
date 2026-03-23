@@ -6,7 +6,7 @@
  *
  * The initial version of this code was written by Dragos Vingarzan
  * (dragos(dot)vingarzan(at)fokus(dot)fraunhofer(dot)de and the
- * Fruanhofer Institute. It was and still is maintained in a separate
+ * Fraunhofer FOKUS Institute. It was and still is maintained in a separate
  * branch of the original SER. We are therefore migrating it to
  * Kamailio/SR and look forward to maintaining it from here on out.
  * 2011/2012 Smile Communications, Pty. Ltd.
@@ -16,7 +16,7 @@
  * effort to add full IMS support to Kamailio/SR using a new and
  * improved architecture
  *
- * NB: Alot of this code was originally part of OpenIMSCore,
+ * NB: A lot of this code was originally part of OpenIMSCore,
  * FhG Fokus.
  * Copyright (C) 2004-2006 FhG Fokus
  * Thanks for great work! This is an effort to
@@ -26,6 +26,8 @@
  * to manage in the Kamailio/SR environment
  *
  * This file is part of Kamailio, a free SIP server.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -166,7 +168,7 @@ int build_p_associated_uri(ims_subscription *s)
 		if(!p_associated_uri.buf) {
 			p_associated_uri.data_len = 0;
 			p_associated_uri.buf_len = 0;
-			LM_ERR("no pkg memory left\n");
+			PKG_MEM_ERROR;
 			return -1;
 		} else {
 			p_associated_uri.buf_len = p_associated_uri.data_len;
@@ -198,8 +200,8 @@ int build_p_associated_uri(ims_subscription *s)
 					  && strncmp(id->public_identity.s, "tel", 3) == 0) {
 
 				if(cnttel != 0 || cnt != 0) {
-					memcpy(p, ", ", 2);
-					p += 2;
+					memcpy(p, ">, <", 4);
+					p += 4;
 				}
 				memcpy(p, id->public_identity.s, id->public_identity.len);
 				p += id->public_identity.len;
@@ -382,8 +384,7 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
 	str b = {0, 0};
 	uac_req_t req;
 
-	LM_DBG("r_send_third_party_reg: REGISTER to <%.*s>\n", r->req_uri.len,
-			r->req_uri.s);
+	LM_DBG("REGISTER to <%.*s>\n", r->req_uri.len, r->req_uri.s);
 
 	h.len = event_hdr.len + max_fwds_hdr.len;
 	h.len += expires_s.len + 12 + expires_e.len;
@@ -430,7 +431,7 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
 
 	h.s = pkg_malloc(h.len);
 	if(!h.s) {
-		LM_ERR("r_send_third_party_reg: Error allocating %d bytes\n", h.len);
+		PKG_MEM_ERROR;
 		h.len = 0;
 		return 0;
 	}
@@ -483,13 +484,12 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
 	LM_DBG("BODY TYPE(3rd PARTY REGISTER):<%d>\n", r->body.content_type);
 	if(r->body.content_type != CT_NONE) {
 		if(r->body.content_type == CT_SERVICE_INFO) {
-			LM_ERR("BODY (3rd PARTY REGISTER) \"SI\": <%.*s>\n",
+			LM_DBG("BODY (3rd PARTY REGISTER) \"SI\": <%.*s>\n",
 					r->body.content.len, r->body.content.s);
 			b.len = body_s.len + r->body.content.len + body_e.len;
 			b.s = pkg_malloc(b.len);
 			if(!b.s) {
-				LM_ERR("r_send_third_party_reg: Error allocating %d bytes\n",
-						b.len);
+				PKG_MEM_ERROR;
 				b.len = 0;
 				goto error;
 			}
@@ -501,13 +501,12 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
 			STR_APPEND(h, ct_service_info);
 			STR_APPEND(h, content_type_e);
 		} else if(r->body.content_type == CT_REGISTER_REQ) {
-			LM_ERR("BODY (3rd PARTY REGISTER) \"REQ\": <%.*s>\n",
+			LM_DBG("BODY (3rd PARTY REGISTER) \"REQ\": <%.*s>\n",
 					r->body.content.len, r->body.content.s);
 			b.len = r->body.content.len;
 			b.s = pkg_malloc(b.len);
 			if(!b.s) {
-				LM_ERR("r_send_third_party_reg: Error allocating %d bytes\n",
-						b.len);
+				PKG_MEM_ERROR;
 				b.len = 0;
 				goto error;
 			}
@@ -517,13 +516,12 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
 			STR_APPEND(h, ct_register_req);
 			STR_APPEND(h, content_type_e);
 		} else if(r->body.content_type == CT_REGISTER_RESP) {
-			LM_ERR("BODY (3rd PARTY REGISTER) \"RESP\": <%.*s>\n",
+			LM_DBG("BODY (3rd PARTY REGISTER) \"RESP\": <%.*s>\n",
 					r->body.content.len, r->body.content.s);
 			b.len = r->body.content.len;
 			b.s = pkg_malloc(b.len);
 			if(!b.s) {
-				LM_ERR("r_send_third_party_reg: Error allocating %d bytes\n",
-						b.len);
+				PKG_MEM_ERROR;
 				b.len = 0;
 				goto error;
 			}
@@ -539,7 +537,7 @@ int r_send_third_party_reg(r_third_party_registration *r, int expires)
 			TMCB_RESPONSE_IN | TMCB_ON_FAILURE | TMCB_LOCAL_COMPLETED,
 			r_third_party_reg_response, &(r->req_uri));
 	if(isc_tmb.t_request(&req, &(r->req_uri), &(r->to), &(r->from), 0) < 0) {
-		LM_ERR("r_send_third_party_reg: Error sending in transaction\n");
+		LM_ERR("Error sending in transaction\n");
 		goto error;
 	}
 	if(h.s)
@@ -566,9 +564,9 @@ error:
 void r_third_party_reg_response(
 		struct cell *t, int type, struct tmcb_params *ps)
 {
-	LM_DBG("r_third_party_reg_response: code %d\n", ps->code);
+	LM_DBG("code %d\n", ps->code);
 	if(!ps->rpl) {
-		LM_ERR("r_third_party_reg_response: No reply\n");
+		LM_ERR("No reply\n");
 		return;
 	}
 
@@ -579,6 +577,6 @@ void r_third_party_reg_response(
 			return;
 	} else if(ps->code == 404) {
 	} else {
-		LM_DBG("r_third_party_reg_response: code %d\n", ps->code);
+		LM_DBG("code %d\n", ps->code);
 	}
 }

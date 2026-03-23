@@ -9,6 +9,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -216,16 +218,6 @@ static int child_init(int rank)
 
 static void mod_destroy(void)
 {
-	/*destroy shared memory*/
-	if(dp_default_par2) {
-		shm_free(dp_default_par2);
-		dp_default_par2 = NULL;
-	}
-	if(dp_rpc_reload_time != NULL) {
-		shm_free(dp_rpc_reload_time);
-		dp_rpc_reload_time = 0;
-	}
-	destroy_data();
 }
 
 

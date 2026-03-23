@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -30,6 +32,7 @@
 
 #define DEFAULT_CSEQ 10 /* Default CSeq number */
 
+
 /* structure for UAC interface
  *
  * You can free the memory allocated
@@ -51,6 +54,10 @@ typedef struct uac_req
 	transaction_cb *cb;
 	void *cbp;
 	str *callid;
+	str *fromtag;
+	unsigned int cseqno;
+	unsigned int fr_timeout;
+	unsigned int fr_inv_timeout;
 } uac_req_t;
 
 /* macro for setting the values of uac_req_t struct */
@@ -133,6 +140,8 @@ void free_local_ack_unsafe(struct retr_buf *lack);
  * ACK an existing local INVITE transaction...
  */
 int ack_local_uac(struct cell *trans, str *hdrs, str *body);
+
+int uac_evrt_local_ack_sent(sip_msg_t *rpl);
 
 /*
  * Send a transactional request, no dialogs involved

@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -196,17 +198,21 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 	str comp_val; /* not returned for now */
 #endif
 
+/* derived from the ASCII values of the protocol scheme strings
+ ("sip:", "sips", "tel:", "urn:") interpreted as 4-byte
+ little-endian integers.
+ */
 #define SIP_SCH 0x3a706973
 #define SIPS_SCH 0x73706973
 #define TEL_SCH 0x3a6c6574
 #define URN_SCH 0x3a6e7275
 
-#define case_port(ch, var)           \
-	case ch:                         \
-		(var) = (var)*10 + ch - '0'; \
-		if((var) > MAX_PORT_VAL) {   \
-			goto error_bad_port;     \
-		}                            \
+#define case_port(ch, var)             \
+	case ch:                           \
+		(var) = (var) * 10 + ch - '0'; \
+		if((var) > MAX_PORT_VAL) {     \
+			goto error_bad_port;       \
+		}                              \
 		break
 
 #define still_at_user                                      \
@@ -237,28 +243,34 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 	} else                                                 \
 		goto error_bad_char
 
-#define check_host_end         \
-	case ':':                  \
-		/* found the host */   \
-		uri->host.s = s;       \
-		uri->host.len = p - s; \
-		state = URI_PORT;      \
-		s = p + 1;             \
-		break;                 \
-	case ';':                  \
-		uri->host.s = s;       \
-		uri->host.len = p - s; \
-		state = URI_PARAM;     \
-		s = p + 1;             \
-		break;                 \
-	case '?':                  \
-		uri->host.s = s;       \
-		uri->host.len = p - s; \
-		state = URI_HEADERS;   \
-		s = p + 1;             \
-		break;                 \
-	case '&':                  \
-	case '@':                  \
+#define check_host_end             \
+	case ':':                      \
+		/* found the host */       \
+		if(scheme != URN_SCH) {    \
+			uri->host.s = s;       \
+			uri->host.len = p - s; \
+			state = URI_PORT;      \
+			s = p + 1;             \
+		}                          \
+		break;                     \
+	case ';':                      \
+		uri->host.s = s;           \
+		uri->host.len = p - s;     \
+		state = URI_PARAM;         \
+		s = p + 1;                 \
+		break;                     \
+	case '?':                      \
+		uri->host.s = s;           \
+		uri->host.len = p - s;     \
+		state = URI_HEADERS;       \
+		s = p + 1;                 \
+		break;                     \
+	case '@':                      \
+		if(scheme != URN_SCH) {    \
+			goto error_bad_char;   \
+		}                          \
+		break;                     \
+	case '&':                      \
 		goto error_bad_char
 
 
@@ -459,6 +471,8 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 		goto error_too_short;
 	scheme = ((uint32_t)buf[0]) + (((uint32_t)buf[1]) << 8)
 			 + (((uint32_t)buf[2]) << 16) + (((uint32_t)buf[3]) << 24);
+	/* make it case insensitive by converting to lowercase
+	OR with difference between 'A' and 'a' is 32 (0x20) */
 	scheme |= 0x20202020;
 	if(scheme == SIP_SCH) {
 		uri->type = SIP_URI_T;
@@ -493,7 +507,7 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 					case '@': /* error no user part, or
 								* be forgiving and accept it ? */
 					default:
-						state = URI_USER;
+						state = (scheme == URN_SCH) ? URI_HOST : URI_USER;
 				}
 				break;
 			case URI_USER:
@@ -628,7 +642,7 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 				if(*p == '[') {
 					state = URI_HOST6_P;
 				} else {
-					if(isalnum(*p)) {
+					if(isalnum((unsigned char)(*p))) {
 						state = URI_HOST_P;
 					} else {
 						goto error_bad_host;
@@ -639,8 +653,8 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 				switch(*p) {
 					check_host_end;
 					default:
-						if(!isalnum(*p) && (*p != '.') && (*p != '-')
-								&& !uri_host_char_allowed(*p)) {
+						if(!isalnum((unsigned char)(*p)) && (*p != '.')
+								&& (*p != '-') && !uri_host_char_allowed(*p)) {
 							goto error_bad_host;
 						}
 				}
@@ -1273,7 +1287,7 @@ int parse_uri(char *buf, int len, struct sip_uri *uri)
 			uri->sip_params = uri->params;
 			if((phone2tel) && (uri->user_param_val.len == 5)
 					&& (strncmp(uri->user_param_val.s, "phone", 5) == 0)) {
-				uri->type = TEL_URI_T;
+				uri->type = uri->type == SIPS_URI_T ? TELS_URI_T : TEL_URI_T;
 				uri->flags |= URI_SIP_USER_PHONE;
 				/* move params from user into uri->params */
 				p = q_memchr(uri->user.s, ';', uri->user.len);

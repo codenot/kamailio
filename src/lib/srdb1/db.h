@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -48,6 +50,8 @@
 #include "db_cap.h"
 #include "db_con.h"
 #include "db_row.h"
+#include "db_id.h"
+#include "db_pool.h"
 #include "db_pooling.h"
 #include "db_locking.h"
 
@@ -203,11 +207,11 @@ typedef int (*db_raw_query_f)(
  * escape_common and unescape_common functions in the core for this task.
  * \see escape_common
  * \see unescape_common
- * \param _h structure representing database connection
+ * \param _u the database URL
  * \param _s the SQL query
  * \return returns 0 if everything is OK, otherwise returns value < 0
  */
-typedef int (*db_raw_query_async_f)(const db1_con_t *_h, const str *_s);
+typedef int (*db_raw_query_async_f)(const str *_u, const str *_s);
 
 
 /**
@@ -464,7 +468,7 @@ int db_bind_mod(const str *mod, db_func_t *dbf);
  * \return returns a pointer to the db1_con_t representing the connection if it was
    successful, otherwise 0 is returned.
  */
-db1_con_t *db_do_init(const str *url, void *(*new_connection)());
+db1_con_t *db_do_init(const str *url, void *(*new_connection)(struct db_id *));
 
 
 /**
@@ -478,9 +482,14 @@ db1_con_t *db_do_init(const str *url, void *(*new_connection)());
  * \return returns a pointer to the db1_con_t representing the connection if it was
    successful, otherwise 0 is returned.
  */
-db1_con_t *db_do_init2(
-		const str *url, void *(*new_connection)(), db_pooling_t pooling);
+db1_con_t *db_do_init2(const str *url, void *(*new_connection)(struct db_id *),
+		db_pooling_t pooling);
 
+
+/*! \brief
+ * free database connection
+ */
+void db_do_con_free(db1_con_t *_h);
 
 /**
  * \brief Helper for db_close function.
@@ -490,7 +499,7 @@ db1_con_t *db_do_init2(
  * \param _h database connection handle
  * \param (*free_connection) Pointer to the db specific free_connection method
  */
-void db_do_close(db1_con_t *_h, void (*free_connection)());
+void db_do_close(db1_con_t *_h, void (*free_connection)(struct pool_con *));
 
 
 /**

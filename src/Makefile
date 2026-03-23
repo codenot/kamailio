@@ -118,10 +118,10 @@ endif
 endif
 else # config.mak doesn't need to be used
 ifneq (,$(filter cfg config cfg-defs,$(word 1,$(MAKECMDGOALS))))
-# needed here to avoid starting a config submake 
-# (e.g. rm -f config.mak; make config.mak), which would either require 
+# needed here to avoid starting a config submake
+# (e.g. rm -f config.mak; make config.mak), which would either require
 # double Makefile.defs defines execution (suboptimal), would loose
-# $(value ...) expansion or would cause some warning (if Makefile.defs exec. 
+# $(value ...) expansion or would cause some warning (if Makefile.defs exec.
 # is skipped in the "main" makefile invocation).
 $(shell rm -rf config.mak)
 config_mak=0
@@ -154,12 +154,13 @@ export extra_defs
 # When group_include is used, we want: include_modules (based on group_include)
 # - exclude_modules
 
-ifneq ($(modules_configured),1) 
-#modules_all=$(filter-out modules/CVS,$(wildcard modules/*))
+ifneq ($(modules_configured),1)
+#modules_all=$(filter-out modules/CMakeLists.txt,$(wildcard modules/*))
 
 # create modules*_all vars
 $(foreach mods,$(modules_dirs),$(eval \
-	$(mods)_all=$$(filter-out $(mods)/CVS,$$(wildcard $(mods)/*))))
+	$(mods)_all=$$(filter-out $(mods)/CMakeLists.txt, \
+	$$(wildcard $(mods)/*))))
 #debugging
 #$(foreach mods,$(modules_dirs),$(info "$(mods)_all=$($(mods)_all)"))
 
@@ -168,7 +169,7 @@ $(foreach mods,$(modules_dirs),$(eval \
 	$(mods)=$$(filter-out $$(addprefix $(mods)/, \
 			$$(exclude_modules) $$(static_modules)), \
 			$$(addprefix $(mods)/, $$(include_modules) )) ))
-else	
+else
 	# Standard, old resultant set
 $(foreach mods,$(modules_dirs),$(eval \
 	$(mods)_noinc=$$(filter-out $$(addprefix $(mods)/, \
@@ -214,14 +215,14 @@ C_INSTALL_UTILS= ../utils/kamctl
 else
 C_INSTALL_UTILS=
 endif
-# list of scripts that should be installed along the core 
+# list of scripts that should be installed along the core
 # (here a script is something that doesn't have a Makefile)
 C_INSTALL_SCRIPTS=
 # list of extra configs that should be installed along the core
 # Note: all the paths of the form /usr/*lib/$(CFG_NAME)/<module_dir>
 # will be updated to the directory where the modules will be installed.
 C_INSTALL_CFGS=
-# list of files that should be installed in the arch-independent 
+# list of files that should be installed in the arch-independent
 # directory (by default /usr/local/share/$(MAIN_NAME)))
 C_INSTALL_SHARE=
 
@@ -237,11 +238,11 @@ tar_extra_args+=$(addprefix --exclude=$(notdir $(CURDIR))/, \
 ifeq ($(CORE_TLS), 1)
 	tar_extra_args+=
 else
-	tar_extra_args+=--exclude=$(notdir $(CURDIR))/tls/* 
+	tar_extra_args+=--exclude=$(notdir $(CURDIR))/tls/*
 endif
 
 ifneq ($(nodeb),)
-	tar_extra_args+=--exclude=$(notdir $(CURDIR))/debian 
+	tar_extra_args+=--exclude=$(notdir $(CURDIR))/debian
 	tar_name:=$(tar_name)_nodeb
 endif
 
@@ -260,7 +261,8 @@ $(NAME): $(extra_objs) # static_modules
 core/lex.yy.c: core/cfg.lex core/cfg.tab.h $(ALLDEP)
 	$(LEX) -o core/lex.yy.c $<
 
-core/cfg.tab.c core/cfg.tab.h: core/cfg.y  $(ALLDEP)
+core/cfg.tab.c: core/cfg.tab.h
+core/cfg.tab.h: core/cfg.y  $(ALLDEP)
 	$(YACC) $(YACC_FLAGS) $<
 
 nullstring=
@@ -513,7 +515,7 @@ $(foreach mods,$(modules_dirs),$(eval $(call MODULES_RULES_template,$(mods))))
 modules-all every-module: $(modules_dirs)
 
 $(extra_objs):
-	@echo "Extra objs: $(extra_objs)" 
+	@echo "Extra objs: $(extra_objs)"
 	@for r in $(static_modules_path) "" ; do \
 		if [ -n "$$r" -a -r "$$r/Makefile"  ]; then \
 			$(call oecho, "" ;) \
@@ -564,9 +566,6 @@ tar: makefile_vars $(auto_gen_keep)
 		--exclude=$(notdir $(realpath $(shell pwd)/..))/$(MAIN_NAME)_tls* \
 		--exclude=$(notdir $(realpath $(shell pwd)/..))/misc/obsolete \
 		--exclude=.git* \
-		--exclude=CVS* \
-		--exclude=.svn* \
-		--exclude=.cvsignore \
 		--exclude=tags \
 		--exclude=librpath.lst \
 		--exclude=libiname.lst \
@@ -670,10 +669,10 @@ mk-install_dirs: $(cfg_prefix)/$(cfg_dir) $(bin_prefix)/$(bin_dir) \
 				$(modules_prefix)/$(modules_dir)$(mods) \
 				$(doc_prefix)/$(doc_dir)$(mods) )
 
-$(cfg_prefix)/$(cfg_dir): 
+$(cfg_prefix)/$(cfg_dir):
 		mkdir -p $(cfg_prefix)/$(cfg_dir)
 
-$(run_prefix)/$(run_dir): 
+$(run_prefix)/$(run_dir):
 		mkdir -p $(run_prefix)/$(run_dir)
 
 $(bin_prefix)/$(bin_dir):

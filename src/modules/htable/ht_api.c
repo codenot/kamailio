@@ -255,7 +255,7 @@ ht_t *ht_get_table(str *name)
 
 int ht_add_table(str *name, int autoexp, str *dbtable, str *dbcols, int size,
 		int dbmode, int itype, int_str *ival, int updateexpire,
-		int dmqreplicate, char coldelim, char colnull)
+		int dmqreplicate, char coldelim, char colnull, int reloadat)
 {
 	unsigned int htid;
 	ht_t *ht;
@@ -303,6 +303,8 @@ int ht_add_table(str *name, int autoexp, str *dbtable, str *dbcols, int size,
 	if(ival != NULL)
 		ht->initval = *ival;
 	ht->dmqreplicate = dmqreplicate;
+	ht->reloadat = reloadat;
+	ht->last_reload = 0;
 
 	if(dbcols != NULL && dbcols->s != NULL && dbcols->len > 0) {
 		ht->scols[0].s = (char *)shm_malloc((1 + dbcols->len) * sizeof(char));
@@ -359,6 +361,11 @@ int ht_init_tables(void)
 	ht = _ht_root;
 
 	while(ht) {
+		if(ht->entries != NULL) {
+			ht = ht->next;
+			continue;
+		}
+
 		LM_DBG("initializing htable [%.*s] with nr. of slots: %d\n",
 				ht->name.len, ht->name.s, ht->htsize);
 		if(ht->name.len + sizeof("htable:expired:") < HT_EVEX_NAME_SIZE) {
@@ -383,6 +390,33 @@ int ht_init_tables(void)
 					" is too long\n",
 					ht->name.len, ht->name.s);
 		}
+
+		/* initialize reloaded event route */
+		if(ht->name.len + sizeof("htable:reloaded:") < HT_EVEX_NAME_SIZE) {
+			strcpy(ht->evex_reload_name_buf, "htable:reloaded:");
+			strncat(ht->evex_reload_name_buf, ht->name.s, ht->name.len);
+			ht->evex_reload_name.s = ht->evex_reload_name_buf;
+			ht->evex_reload_name.len = strlen(ht->evex_reload_name_buf);
+
+			ht->evex_reload_index =
+					route_lookup(&event_rt, ht->evex_reload_name_buf);
+
+			if(ht->evex_reload_index < 0
+					|| event_rt.rlist[ht->evex_reload_index] == NULL) {
+				ht->evex_reload_index = -1;
+				LM_DBG("event route for reloaded items in [%.*s] does not "
+					   "exist\n",
+						ht->name.len, ht->name.s);
+			} else {
+				LM_DBG("event route for reloaded items in [%.*s] exists\n",
+						ht->name.len, ht->name.s);
+			}
+		} else {
+			LM_WARN("event route name for reloaded items in htable [%.*s]"
+					" is too long\n",
+					ht->name.len, ht->name.s);
+		}
+
 		ht->entries = (ht_entry_t *)shm_malloc(ht->htsize * sizeof(ht_entry_t));
 		if(ht->entries == NULL) {
 			LM_ERR("no more shared memory for [%.*s]\n", ht->name.len,
@@ -491,9 +525,7 @@ int ht_set_cell_ex(
 						it->value.s.s[it->value.s.len] = '\0';
 
 						if(exv <= 0) {
-							if(ht->updateexpire) {
-								it->expire = now + ht->htexpire;
-							}
+							HT_UPDATE_EXPIRE(ht, it, now);
 						} else {
 							it->expire = now + exv;
 						}
@@ -509,11 +541,7 @@ int ht_set_cell_ex(
 						cell->next = it->next;
 						cell->prev = it->prev;
 						if(exv <= 0) {
-							if(ht->updateexpire) {
-								cell->expire = now + ht->htexpire;
-							} else {
-								cell->expire = it->expire;
-							}
+							HT_COPY_EXPIRE(ht, cell, now, it);
 						} else {
 							it->expire = now + exv;
 						}
@@ -530,9 +558,7 @@ int ht_set_cell_ex(
 					it->value.n = val->n;
 
 					if(exv <= 0) {
-						if(ht->updateexpire) {
-							it->expire = now + ht->htexpire;
-						}
+						HT_UPDATE_EXPIRE(ht, it, now);
 					} else {
 						it->expire = now + exv;
 					}
@@ -551,11 +577,7 @@ int ht_set_cell_ex(
 						return -1;
 					}
 					if(exv <= 0) {
-						if(ht->updateexpire) {
-							cell->expire = now + ht->htexpire;
-						} else {
-							cell->expire = it->expire;
-						}
+						HT_COPY_EXPIRE(ht, cell, now, it);
 					} else {
 						it->expire = now + exv;
 					}
@@ -573,9 +595,7 @@ int ht_set_cell_ex(
 					it->value.n = val->n;
 
 					if(exv <= 0) {
-						if(ht->updateexpire) {
-							it->expire = now + ht->htexpire;
-						}
+						HT_UPDATE_EXPIRE(ht, it, now);
 					} else {
 						it->expire = now + exv;
 					}
@@ -738,6 +758,10 @@ ht_cell_t *ht_cell_value_add(ht_t *ht, str *name, int val, ht_cell_t *old)
 			if(now > 0 && it->expire != 0 && it->expire < now) {
 				/* entry has expired */
 
+				it->expire = ht->htexpire;
+				if(it->expire) {
+					it->expire += now;
+				}
 				if(ht->flags == PV_VAL_INT) {
 					/* initval is integer, use it to create a fresh entry */
 					it->flags &= ~AVP_VAL_STR;
@@ -860,8 +884,14 @@ ht_cell_t *ht_cell_pkg_copy(ht_t *ht, str *name, ht_cell_t *old)
 				}
 			}
 			cell = (ht_cell_t *)pkg_malloc(it->msize);
-			if(cell != NULL)
+			if(cell != NULL) {
 				memcpy(cell, it, it->msize);
+
+				cell->name.s = (char *)cell + sizeof(ht_cell_t);
+				if(cell->flags & AVP_VAL_STR) {
+					cell->value.s.s = (char *)cell->name.s + cell->name.len + 1;
+				}
+			}
 			ht_slot_unlock(ht, idx);
 			return cell;
 		}
@@ -958,6 +988,7 @@ int ht_table_spec(char *spec)
 	unsigned int dbmode = 0;
 	unsigned int updateexpire = 1;
 	unsigned int dmqreplicate = 0;
+	unsigned int reloadat = 0;
 	char coldelim = ',';
 	char colnull = '*';
 	str in;
@@ -1046,13 +1077,20 @@ int ht_table_spec(char *spec)
 			}
 
 			LM_DBG("htable [%.*s] - colnull [%c]\n", name.len, name.s, colnull);
+		} else if(pit->name.len == 8
+				  && strncmp(pit->name.s, "reloadat", 8) == 0) {
+			if(str2int(&tok, &reloadat) != 0)
+				goto error;
+			LM_DBG("htable [%.*s] - reloadat [%u]\n", name.len, name.s,
+					reloadat);
 		} else {
 			goto error;
 		}
 	}
 
 	return ht_add_table(&name, autoexpire, &dbtable, &dbcols, size, dbmode,
-			itype, &ival, updateexpire, dmqreplicate, coldelim, colnull);
+			itype, &ival, updateexpire, dmqreplicate, coldelim, colnull,
+			reloadat);
 
 error:
 	LM_ERR("invalid htable parameter [%.*s]\n", in.len, in.s);
@@ -1161,6 +1199,18 @@ void ht_timer(unsigned int ticks, void *param)
 				ht_slot_unlock(ht, i);
 			}
 		}
+
+		/* check if table needs reloading */
+		if(ht->reloadat > 0 && ht->dbtable.s != NULL && ht->dbtable.len > 0) {
+			if(ht->last_reload == 0
+					|| (now - ht->last_reload) >= (time_t)ht->reloadat) {
+				if(ht_reload_table(ht) == 0) {
+					ht->last_reload = now;
+					ht_handle_reloaded_table(ht);
+				}
+			}
+		}
+
 		ht = ht->next;
 	}
 	return;
@@ -1217,6 +1267,61 @@ void ht_handle_expired_record(ht_t *ht, ht_cell_t *cell)
 	set_route_type(backup_rt);
 
 	ht_expired_cell = NULL;
+}
+
+void ht_handle_reloaded_table(ht_t *ht)
+{
+	int backup_rt;
+	sip_msg_t *fmsg;
+	sr_kemi_eng_t *keng = NULL;
+
+	if(ht == NULL) {
+		LM_DBG("htable pointer is NULL\n");
+		return;
+	}
+
+	if(ht_event_callback.s == NULL || ht_event_callback.len <= 0) {
+		if(ht->evex_reload_index < 0
+				|| event_rt.rlist[ht->evex_reload_index] == NULL) {
+			LM_DBG("route does not exist\n");
+			return;
+		}
+	} else {
+		keng = sr_kemi_eng_get();
+		if(keng == NULL) {
+			LM_DBG("event callback (%s) set, but no cfg engine\n",
+					ht_event_callback.s);
+			return;
+		}
+	}
+
+	LM_DBG("running event_route[htable:reloaded:%.*s]\n", ht->name.len,
+			ht->name.s);
+
+	if(faked_msg_init() < 0) {
+		LM_ERR("faked_msg_init() failed\n");
+		return;
+	}
+
+	fmsg = faked_msg_next();
+	fmsg->parsed_orig_ruri_ok = 0;
+
+	backup_rt = get_route_type();
+
+	set_route_type(EVENT_ROUTE);
+	if(ht->evex_reload_index >= 0) {
+		run_top_route(event_rt.rlist[ht->evex_reload_index], fmsg, 0);
+	} else {
+		if(keng != NULL) {
+			if(sr_kemi_route(keng, fmsg, EVENT_ROUTE, &ht_event_callback,
+					   &ht->evex_reload_name)
+					< 0) {
+				LM_ERR("error running event route kemi callback\n");
+			}
+		}
+	}
+
+	set_route_type(backup_rt);
 }
 
 int ht_set_cell_expire(ht_t *ht, str *name, int type, int_str *val)
@@ -1565,6 +1670,7 @@ int ht_count_cells_re(str *sre, ht_t *ht, int mode)
 	str sval;
 	str tval;
 	int ival = 0;
+	time_t tnow = 0;
 
 	if(sre == NULL || sre->len <= 0 || ht == NULL)
 		return 0;
@@ -1644,11 +1750,17 @@ int ht_count_cells_re(str *sre, ht_t *ht, int mode)
 		}
 	}
 
+	tnow = time(NULL);
 	for(i = 0; i < ht->htsize; i++) {
 		/* free entries */
 		ht_slot_lock(ht, i);
 		it = ht->entries[i].first;
 		while(it) {
+			if(ht->htexpire > 0 && it->expire != 0 && it->expire < tnow) {
+				/* entry has expired, continue */
+				it = it->next;
+				continue;
+			}
 			it0 = it->next;
 			if(op == 5) {
 				if(!(it->flags & AVP_VAL_STR))

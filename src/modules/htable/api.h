@@ -25,6 +25,8 @@
 #include "../../core/sr_module.h"
 #include "../../core/usr_avp.h"
 
+typedef int (*ht_api_table_spec_f)(char *spec);
+typedef int (*ht_api_init_tables_f)(void);
 typedef int (*ht_api_set_cell_f)(
 		str *hname, str *name, int type, int_str *val, int mode);
 typedef ht_cell_t *(*ht_api_get_cell_clone_f)(str *hname, str *name);
@@ -38,8 +40,15 @@ typedef int (*ht_api_get_cell_expire_f)(
 typedef int (*ht_api_rm_cell_re_f)(str *hname, str *sre, int mode);
 typedef int (*ht_api_count_cells_re_f)(str *hname, str *sre, int mode);
 
+typedef int (*ht_api_db_open_con_f)(void);
+typedef int (*ht_api_db_close_con_f)(void);
+typedef int (*ht_api_db_load_tables_f)(void);
+typedef int (*ht_api_db_sync_tables_f)(void);
+
 typedef struct htable_api
 {
+	ht_api_table_spec_f table_spec;
+	ht_api_init_tables_f init_tables;
 	ht_api_set_cell_f set;
 	ht_api_get_cell_clone_f get_clone;
 	ht_api_del_cell_f rm;
@@ -47,6 +56,10 @@ typedef struct htable_api
 	ht_api_get_cell_expire_f get_expire;
 	ht_api_rm_cell_re_f rm_re;
 	ht_api_count_cells_re_f count_re;
+	ht_api_db_open_con_f db_open_con;
+	ht_api_db_close_con_f db_close_con;
+	ht_api_db_load_tables_f db_load_tables;
+	ht_api_db_sync_tables_f db_sync_tables;
 } htable_api_t;
 
 typedef int (*bind_htable_f)(htable_api_t *api);

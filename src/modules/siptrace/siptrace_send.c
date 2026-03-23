@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -357,6 +359,8 @@ int trace_send_duplicate(char *buf, int len, dest_info_t *dst2)
 					pdst->to.s.sa_family, pdst->proto);
 			goto error;
 		}
+	} else {
+		pdst->send_flags.f |= SND_F_FORCE_SOCKET;
 	}
 
 	if(msg_send_buffer(pdst, buf, len, 1) < 0) {

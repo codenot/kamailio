@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -41,8 +43,6 @@
 #define MI_DLG_OPERATION_ERR_LEN (sizeof(MI_DLG_OPERATION_ERR) - 1)
 
 extern struct tm_binds d_tmb;
-
-struct mi_root *mi_terminate_dlg(struct mi_root *cmd_tree, void *param);
 
 dlg_t *build_dlg_t(struct dlg_cell *cell, int dir);
 int free_tm_dlg(dlg_t *td);

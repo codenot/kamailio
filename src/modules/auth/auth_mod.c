@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -138,10 +140,15 @@ str auth_algorithm = {"", 0};
 
 #define AUTH_ALG_MD5_IDX 0
 #define AUTH_ALG_SHA256_IDX 1
+#define AUTH_ALG_SHA512_IDX 2
+#define AUTH_ALG_SHA512_256_IDX 3
+
 /* clang-format off */
 static str auth_algorithm_list[] = {
 	{"MD5", 3},
 	{"SHA-256", 7},
+	{"SHA-512", 7},
+	{"SHA-512-256", 11},
 	{NULL, 0}
 };
 /* clang-format on */
@@ -221,7 +228,7 @@ static param_export_t params[] = {
 	{"realm_prefix", PARAM_STRING, &auth_realm_prefix.s},
 	{"use_domain", PARAM_INT, &auth_use_domain},
 	{"algorithm", PARAM_STR, &auth_algorithm},
-	{"add_authinfo_hdr", INT_PARAM, &add_authinfo_hdr},
+	{"add_authinfo_hdr", PARAM_INT, &add_authinfo_hdr},
 
 	{0, 0, 0}
 };
@@ -393,6 +400,16 @@ static int mod_init(void)
 		hash_hex_len = HASHHEXLEN_SHA256;
 		calc_HA1 = calc_HA1_sha256;
 		calc_response = calc_response_sha256;
+	} else if(strcmp(auth_algorithm.s, "SHA-512-256") == 0) {
+		auth_algorithm = auth_algorithm_list[AUTH_ALG_SHA512_256_IDX];
+		hash_hex_len = HASHHEXLEN_SHA512_256;
+		calc_HA1 = calc_HA1_sha512_256;
+		calc_response = calc_response_sha512_256;
+	} else if(strcmp(auth_algorithm.s, "SHA-512") == 0) {
+		auth_algorithm = auth_algorithm_list[AUTH_ALG_SHA512_IDX];
+		hash_hex_len = HASHHEXLEN_SHA512;
+		calc_HA1 = calc_HA1_sha512;
+		calc_response = calc_response_sha512;
 	} else {
 		LM_ERR("Invalid algorithm provided."
 			   " Possible values are \"\", \"MD5\" or \"SHA-256\"\n");
@@ -515,9 +532,19 @@ static int ki_auth_algorithm(sip_msg_t *msg, str *alg)
 		hash_hex_len = HASHHEXLEN_SHA256;
 		calc_HA1 = calc_HA1_sha256;
 		calc_response = calc_response_sha256;
+	} else if(strcmp(auth_algorithm.s, "SHA-512-256") == 0) {
+		auth_algorithm = auth_algorithm_list[AUTH_ALG_SHA512_256_IDX];
+		hash_hex_len = HASHHEXLEN_SHA512_256;
+		calc_HA1 = calc_HA1_sha512_256;
+		calc_response = calc_response_sha512_256;
+	} else if(strcmp(auth_algorithm.s, "SHA-512") == 0) {
+		auth_algorithm = auth_algorithm_list[AUTH_ALG_SHA512_IDX];
+		hash_hex_len = HASHHEXLEN_SHA512;
+		calc_HA1 = calc_HA1_sha512;
+		calc_response = calc_response_sha512;
 	} else {
 		LM_ERR("Invalid algorithm provided."
-			   " Possible values are \"\", \"MD5\" or \"SHA-256\"\n");
+			   " Possible values are 'MD5', 'SHA-256' or 'SHA-512'\n");
 		return -1;
 	}
 
@@ -555,9 +582,9 @@ static int auth_check_hdr_md5_noupdate(
  * @brief do WWW-Digest authentication with password taken from cfg var
  */
 int pv_authenticate(struct sip_msg *msg, str *realm, str *passwd, int flags,
-		int hftype, str *method)
+		int hftype, hdr_field_t **hdr, str *method)
 {
-	struct hdr_field *h;
+	struct hdr_field *h = NULL;
 	auth_body_t *cred;
 	auth_cfg_result_t ret;
 	auth_result_t rauth;
@@ -571,7 +598,7 @@ int pv_authenticate(struct sip_msg *msg, str *realm, str *passwd, int flags,
 	ret = AUTH_ERROR;
 
 #ifdef USE_NC
-	if(nc_enabled && (flags & 32))
+	if(nc_enabled && (flags & AUTH_FLAG_NOINVNC))
 		check_auth_hdr = auth_check_hdr_md5_noupdate;
 #endif
 
@@ -615,7 +642,7 @@ int pv_authenticate(struct sip_msg *msg, str *realm, str *passwd, int flags,
 	cred = (auth_body_t *)h->parsed;
 
 	/* compute HA1 if needed */
-	if((flags & 1) == 0) {
+	if((flags & AUTH_FLAG_PASSWDHA1) == 0) {
 		/* Plaintext password is stored in PV, calculate HA1 */
 		calc_HA1(
 				HA_MD5, &cred->digest.username.whole, realm, passwd, 0, 0, ha1);
@@ -645,7 +672,7 @@ int pv_authenticate(struct sip_msg *msg, str *realm, str *passwd, int flags,
 
 #ifdef USE_NC
 	/* On success we need to update the nonce if flag 32 is set */
-	if(nc_enabled && ret == AUTH_OK && (flags & 32)) {
+	if(nc_enabled && ret == AUTH_OK && (flags & AUTH_FLAG_NOINVNC)) {
 		if(check_nonce(cred, &secret1, &secret2, msg, 1) < 0) {
 			LM_ERR("check_nonce failed after post_auth");
 			ret = AUTH_ERROR;
@@ -654,13 +681,16 @@ int pv_authenticate(struct sip_msg *msg, str *realm, str *passwd, int flags,
 #endif
 
 end:
+	if(hdr != NULL) {
+		*hdr = h;
+	}
 	if(ret < 0) {
 		/* check if required to add challenge header as avp */
 		if(!(flags & 14))
 			return ret;
-		if(flags & 8) {
+		if(flags & AUTH_FLAG_HDRQOPAUTHINT) {
 			qop = &auth_qauthint;
-		} else if(flags & 4) {
+		} else if(flags & AUTH_FLAG_HDRQOPAUTH) {
 			qop = &auth_qauth;
 		}
 		if(get_challenge_hf(msg, (cred ? cred->stale : 0), realm, NULL,
@@ -682,6 +712,16 @@ end:
 	}
 
 	return ret;
+}
+
+/**
+ *
+ */
+static int ki_pv_proxy_authenticate(
+		sip_msg_t *msg, str *realm, str *passwd, int flags)
+{
+	return pv_authenticate(msg, realm, passwd, flags, HDR_PROXYAUTH_T, NULL,
+			&msg->first_line.u.request.method);
 }
 
 /**
@@ -719,10 +759,30 @@ static int pv_proxy_authenticate(
 		goto error;
 	}
 	return pv_authenticate(msg, &srealm, &spasswd, vflags, HDR_PROXYAUTH_T,
-			&msg->first_line.u.request.method);
+			NULL, &msg->first_line.u.request.method);
 
 error:
 	return AUTH_ERROR;
+}
+
+/**
+ *
+ */
+static int ki_pv_www_authenticate(
+		sip_msg_t *msg, str *realm, str *passwd, int flags)
+{
+	return pv_authenticate(msg, realm, passwd, flags, HDR_AUTHORIZATION_T, NULL,
+			&msg->first_line.u.request.method);
+}
+
+/**
+ *
+ */
+static int ki_pv_www_authenticate_method(
+		sip_msg_t *msg, str *realm, str *passwd, int flags, str *method)
+{
+	return pv_authenticate(
+			msg, realm, passwd, flags, HDR_AUTHORIZATION_T, NULL, method);
 }
 
 /**
@@ -760,7 +820,7 @@ static int pv_www_authenticate(
 		goto error;
 	}
 	return pv_authenticate(msg, &srealm, &spasswd, vflags, HDR_AUTHORIZATION_T,
-			&msg->first_line.u.request.method);
+			NULL, &msg->first_line.u.request.method);
 
 error:
 	return AUTH_ERROR;
@@ -809,8 +869,8 @@ static int pv_www_authenticate2(struct sip_msg *msg, char *realm, char *passwd,
 		goto error;
 	}
 
-	return pv_authenticate(
-			msg, &srealm, &spasswd, vflags, HDR_AUTHORIZATION_T, &smethod);
+	return pv_authenticate(msg, &srealm, &spasswd, vflags, HDR_AUTHORIZATION_T,
+			NULL, &smethod);
 
 error:
 	return AUTH_ERROR;
@@ -829,15 +889,14 @@ static int pv_auth_check(
 	sip_uri_t *furi = NULL;
 	str suser;
 
-	if(msg->REQ_METHOD == METHOD_REGISTER)
+	if(msg->REQ_METHOD == METHOD_REGISTER) {
 		ret = pv_authenticate(msg, srealm, spasswd, vflags, HDR_AUTHORIZATION_T,
-				&msg->first_line.u.request.method);
-	else
+				&hdr, &msg->first_line.u.request.method);
+	} else {
 		ret = pv_authenticate(msg, srealm, spasswd, vflags, HDR_PROXYAUTH_T,
-				&msg->first_line.u.request.method);
-
+				&hdr, &msg->first_line.u.request.method);
+	}
 	if(ret == AUTH_OK && (vchecks & AUTH_CHECK_ID_F)) {
-		hdr = (msg->proxy_auth == 0) ? msg->authorization : msg->proxy_auth;
 		if(hdr == NULL) {
 			if(msg->REQ_METHOD & (METHOD_ACK | METHOD_CANCEL | METHOD_PRACK)) {
 				return AUTH_OK;
@@ -1400,6 +1459,21 @@ static sr_kemi_t sr_kemi_auth_exports[] = {
 		SR_KEMIP_INT, pv_auth_check,
 		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_INT,
 			SR_KEMIP_INT, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("auth"), str_init("pv_proxy_authenticate"),
+		SR_KEMIP_INT, ki_pv_proxy_authenticate,
+		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_INT,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("auth"), str_init("pv_www_authenticate"),
+		SR_KEMIP_INT, ki_pv_www_authenticate,
+		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_INT,
+			SR_KEMIP_NONE, SR_KEMIP_NONE, SR_KEMIP_NONE }
+	},
+	{ str_init("auth"), str_init("pv_www_authenticate_method"),
+		SR_KEMIP_INT, ki_pv_www_authenticate_method,
+		{ SR_KEMIP_STR, SR_KEMIP_STR, SR_KEMIP_INT,
+			SR_KEMIP_STR, SR_KEMIP_NONE, SR_KEMIP_NONE }
 	},
 	{ str_init("auth"), str_init("has_credentials"),
 		SR_KEMIP_INT, ki_has_credentials,

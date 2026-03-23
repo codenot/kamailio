@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -81,6 +83,8 @@ struct lump *dup_lump_list(struct lump *l);
 /*! \brief frees a shallowly duplicated lump list */
 void free_duped_lump_list(struct lump *l);
 
+/*! \brief duplicates a lump list deeply in pkg-mem */
+struct lump *copy_lump_list(struct lump *l);
 
 /*! \brief remove all non-SHMEM lumps from the list */
 void del_nonshm_lump(struct lump **lump_list);

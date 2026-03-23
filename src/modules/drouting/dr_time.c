@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -962,7 +964,7 @@ int dr_check_freq_interval(dr_tmrec_p _trp, dr_ac_tm_p _atp)
 						   ? REC_MATCH
 						   : REC_NOMATCH;
 		case FREQ_MONTHLY:
-			_t0 = (_atp->t.tm_year - _trp->ts.tm_year) * 12 + _atp->t.tm_mon
+			_t0 = 12ULL * (_atp->t.tm_year - _trp->ts.tm_year) + _atp->t.tm_mon
 				  - _trp->ts.tm_mon;
 			return (_t0 % _trp->interval == 0) ? REC_MATCH : REC_NOMATCH;
 		case FREQ_YEARLY:

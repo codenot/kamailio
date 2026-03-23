@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -54,7 +56,8 @@ Implements: (see also locking.h)
 #include "mem/mem.h"
 #include "mem/shm_mem.h"
 
-#if defined(FAST_LOCK) || defined(USE_PTHREAD_MUTEX) || defined(USE_POSIX_SEM)
+#if defined(FAST_LOCK) || defined(USE_PTHREAD_MUTEX) || defined(USE_POSIX_SEM) \
+		|| defined(USE_FUTEX)
 /* simple locks*/
 #define lock_alloc() shm_malloc(sizeof(gen_lock_t))
 #define lock_dealloc(lock) shm_free((void *)lock)

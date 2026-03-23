@@ -55,9 +55,12 @@ int _evapi_dispatcher_pid = -1;
 int _evapi_max_clients = 8;
 int _evapi_wait_idle = 500000;
 int _evapi_wait_increase = 3;
+int _evapi_send_task_timeout = EAVPI_SEND_TASK_TIMEOUT_US;
+int _evapi_send_data_timeout = EAVPI_SEND_DATA_TIMEOUT_US;
 
 static str _evapi_data = STR_NULL;
 static int _evapi_data_size = 0;
+static int _evapi_context_mlimit = 0;
 
 static tm_api_t tmb;
 
@@ -73,40 +76,50 @@ static int w_evapi_unicast(sip_msg_t *msg, char *evdata, char *ptag);
 static int w_evapi_async_unicast(sip_msg_t *msg, char *evdata, char *ptag);
 static int w_evapi_close(sip_msg_t *msg, char *p1, char *p2);
 static int w_evapi_set_tag(sip_msg_t *msg, char *ptag, char *p2);
-static int fixup_evapi_relay(void **param, int param_no);
 static int fixup_evapi_multicast(void **param, int param_no);
+static int fixup_free_evapi_multicast(void **param, int param_no);
 
-static cmd_export_t cmds[] = {{"evapi_relay", (cmd_function)w_evapi_relay, 1,
-									  fixup_evapi_relay, 0, ANY_ROUTE},
-		{"evapi_async_relay", (cmd_function)w_evapi_async_relay, 1,
-				fixup_evapi_relay, 0, REQUEST_ROUTE},
-		{"evapi_multicast", (cmd_function)w_evapi_multicast, 2,
-				fixup_evapi_multicast, 0, ANY_ROUTE},
-		{"evapi_async_multicast", (cmd_function)w_evapi_async_multicast, 2,
-				fixup_evapi_multicast, 0, REQUEST_ROUTE},
-		{"evapi_unicast", (cmd_function)w_evapi_unicast, 2,
-				fixup_evapi_multicast, 0, ANY_ROUTE},
-		{"evapi_async_unicast", (cmd_function)w_evapi_async_unicast, 2,
-				fixup_evapi_multicast, 0, REQUEST_ROUTE},
-		{"evapi_close", (cmd_function)w_evapi_close, 0, NULL, 0, ANY_ROUTE},
-		{"evapi_close", (cmd_function)w_evapi_close, 1, NULL, 0, ANY_ROUTE},
-		{"evapi_set_tag", (cmd_function)w_evapi_set_tag, 1, fixup_spve_null, 0,
-				ANY_ROUTE},
-		{0, 0, 0, 0, 0, 0}};
+/* clang-format off */
+static cmd_export_t cmds[] = {
+	{"evapi_relay", (cmd_function)w_evapi_relay, 1,
+		fixup_vstr_all, fixup_free_vstr_all, ANY_ROUTE},
+	{"evapi_async_relay", (cmd_function)w_evapi_async_relay, 1,
+		fixup_vstr_all, fixup_free_vstr_all, REQUEST_ROUTE},
+	{"evapi_multicast", (cmd_function)w_evapi_multicast, 2,
+		fixup_evapi_multicast, fixup_free_evapi_multicast, ANY_ROUTE},
+	{"evapi_async_multicast", (cmd_function)w_evapi_async_multicast, 2,
+		fixup_evapi_multicast, fixup_free_evapi_multicast, REQUEST_ROUTE},
+	{"evapi_unicast", (cmd_function)w_evapi_unicast, 2,
+		fixup_evapi_multicast, fixup_free_evapi_multicast, ANY_ROUTE},
+	{"evapi_async_unicast", (cmd_function)w_evapi_async_unicast, 2,
+		fixup_evapi_multicast, fixup_free_evapi_multicast, REQUEST_ROUTE},
+	{"evapi_close", (cmd_function)w_evapi_close, 0, NULL, 0, ANY_ROUTE},
+	{"evapi_close", (cmd_function)w_evapi_close, 1, NULL, 0, ANY_ROUTE},
+	{"evapi_set_tag", (cmd_function)w_evapi_set_tag, 1, fixup_spve_null,
+		fixup_free_spve_null, ANY_ROUTE},
+	{0, 0, 0, 0, 0, 0}
+};
 
-static param_export_t params[] = {{"workers", INT_PARAM, &_evapi_workers},
-		{"bind_addr", PARAM_STRING, &_evapi_bind_param},
-		{"netstring_format", INT_PARAM, &_evapi_netstring_format_param},
-		{"event_callback", PARAM_STR, &_evapi_event_callback},
-		{"max_clients", PARAM_INT, &_evapi_max_clients},
-		{"wait_idle", PARAM_INT, &_evapi_wait_idle},
-		{"wait_increase", PARAM_INT, &_evapi_wait_increase}, {0, 0, 0}};
+static param_export_t params[] = {
+	{"workers", PARAM_INT, &_evapi_workers},
+	{"bind_addr", PARAM_STRING, &_evapi_bind_param},
+	{"netstring_format", PARAM_INT, &_evapi_netstring_format_param},
+	{"event_callback", PARAM_STR, &_evapi_event_callback},
+	{"max_clients", PARAM_INT, &_evapi_max_clients},
+	{"wait_idle", PARAM_INT, &_evapi_wait_idle},
+	{"wait_increase", PARAM_INT, &_evapi_wait_increase},
+	{"send_task_timeout", PARAM_INT, &_evapi_send_task_timeout},
+	{"send_data_timeout", PARAM_INT, &_evapi_send_data_timeout},
+	{"context_mlimit", PARAM_INT, &_evapi_context_mlimit},
+	{0, 0, 0}
+};
 
 static pv_export_t mod_pvs[] = {
-		{{"evapi", (sizeof("evapi") - 1)}, PVT_OTHER, pv_get_evapi,
-				pv_set_evapi, pv_parse_evapi_name, 0, 0, 0},
-
-		{{0, 0}, 0, 0, 0, 0, 0, 0, 0}};
+	{{"evapi", (sizeof("evapi") - 1)}, PVT_OTHER, pv_get_evapi, pv_set_evapi,
+		pv_parse_evapi_name, 0, 0, 0},
+	{{0, 0}, 0, 0, 0, 0, 0, 0, 0}
+};
+/* clang-format on */
 
 
 struct module_exports exports = {
@@ -160,6 +173,10 @@ static int mod_init(void)
 	}
 	if(evapi_queue_init() < 0) {
 		LM_ERR("failed to init faked internal message queue\n");
+		return -1;
+	}
+	if(evapi_context_init((unsigned int)_evapi_context_mlimit) < 0) {
+		LM_ERR("failed to init internal context\n");
 		return -1;
 	}
 	/* add space for one extra process */
@@ -589,20 +606,23 @@ static int w_evapi_async_unicast(sip_msg_t *msg, char *evdata, char *ptag)
 /**
  *
  */
-static int fixup_evapi_relay(void **param, int param_no)
-{
-	return fixup_vstr_all(param, param_no);
-}
-
-/**
- *
- */
 static int fixup_evapi_multicast(void **param, int param_no)
 {
 	if(param_no == 1) {
 		return fixup_vstr_all(param, param_no);
 	}
 	return fixup_spve_all(param, param_no);
+}
+
+/**
+ *
+ */
+static int fixup_free_evapi_multicast(void **param, int param_no)
+{
+	if(param_no == 1) {
+		return fixup_free_vstr_all(param, param_no);
+	}
+	return fixup_free_spve_all(param, param_no);
 }
 
 /**

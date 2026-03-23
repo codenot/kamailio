@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -944,10 +946,10 @@ static inline void free_sip_msg_lite(struct sip_msg *my_msg)
 			free_lump_list(my_msg->add_rm);
 		if(my_msg->body_lumps)
 			free_lump_list(my_msg->body_lumps);
-		/* this is not in lump_struct.h, and anyhow it's not supposed to be any lumps
-       * in our messages... or is it?
-      if (my_msg->reply_lump)   free_reply_lump(my_msg->reply_lump);
-      */
+		/* this is not in lump_struct.h, and anyhow it's not supposed
+		 * to be any lumps in our messages... or is it?
+		 * if (my_msg->reply_lump)   free_reply_lump_list(my_msg->reply_lump);
+		 */
 	}
 }
 

@@ -10,10 +10,10 @@
 ## chrooted directory
 # CHROOT_DIR="/path/to/chrooted/directory"
 
-## database type: MYSQL, PGSQL, ORACLE, DB_BERKELEY, DBTEXT, or SQLITE
+## database type: MYSQL, PGSQL, ORACLE, DBTEXT, or SQLITE
 ## by default none is loaded
 ##
-## If you want to setup a database with kamdbctl, you must at least specify
+## If you want to set up a database with kamdbctl, you must at least specify
 ## this parameter.
 # DBENGINE=MYSQL
 
@@ -26,7 +26,7 @@
 ## database name (for ORACLE this is TNS name)
 # DBNAME=kamailio
 
-## database path used by dbtext, db_berkeley or sqlite
+## database path used by dbtext or sqlite
 # DB_PATH="/usr/local/etc/kamailio/dbtext"
 
 ## database read/write user
@@ -63,6 +63,12 @@
 ## option to ask confirmation for all database creation steps
 # DBINITASK=yes
 
+## database client command
+# DBCLI="mysql"
+
+## additional parameters to database client command
+# DBCLIPARAMS=""
+
 ## database character set (used by MySQL when creating database)
 #CHARSET="latin1"
 
@@ -79,8 +85,9 @@
 # DEFAULT_Q="1.0"
 
 
-## Program to calculate a message-digest fingerprint
-# MD5="md5sum"
+## Program to calculate the MD5/SHA256 message-digest fingerprint
+# - md5sum, sha256sum
+# CMDHASH="md5sum"
 
 ## awk tool
 # AWK="awk"
@@ -139,10 +146,7 @@
 # ALIASES_TYPE="DB"
 
 ## control engine: RPCFIFO
-## - default RPCFIFO
-# CTLENGINE="RPCFIFO"
-
-## path to FIFO file for engine RPCFIFO
+## path to FIFO file for control engine RPCFIFO
 # RPCFIFOPATH="/run/kamailio/kamailio_rpc.fifo"
 
 ## check ACL names; default on (1); off (0)

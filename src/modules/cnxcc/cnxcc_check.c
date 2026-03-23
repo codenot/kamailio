@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -61,6 +63,13 @@ void check_calls_by_money(unsigned int ticks, void *param)
 
 					if(!call->confirmed)
 						continue;
+
+					if(call->money_based.final_pulse == 0) {
+						LM_WARN("CID [%.*s] - final pulse is 0 - skipping\n",
+								call->sip_data.callid.len,
+								call->sip_data.callid.s);
+						continue;
+					}
 
 					consumed_time =
 							get_current_timestamp() - call->start_timestamp;

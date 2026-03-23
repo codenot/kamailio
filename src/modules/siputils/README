@@ -36,6 +36,8 @@ Bogdan-Andrei Iancu
 
 Gabriel Vasile
 
+Eik Rentzow
+
    Copyright © 2008, 2005, 2003 1&1 Internet AG, FhG Fokus, Voice Sistem
    SRL
      __________________________________________________________________
@@ -95,16 +97,20 @@ Gabriel Vasile
               4.29. set_uri_host(uri, host)
               4.30. is_request()
               4.31. is_reply()
-              4.32. is_gruu([uri])
-              4.33. is_supported(option)
-              4.34. is_first_hop([mode])
-              4.35. sip_p_charging_vector(flags)
-              4.36. contact_param_encode(pname, saddr)
-              4.37. contact_param_decode(pname)
-              4.38. contact_param_decode_uri(pname)
-              4.39. contact_param_rm(pname)
-              4.40. contact_param_check(pname)
-              4.41. hdr_date_check(tdiff)
+              4.32. is_sip()
+              4.33. is_http()
+              4.34. is_gruu([uri])
+              4.35. is_supported(option)
+              4.36. is_first_hop([mode])
+              4.37. sip_p_charging_vector(flags)
+              4.38. contact_param_encode(pname, saddr)
+              4.39. contact_param_encode_alias(pname, saddr)
+              4.40. contact_param_decode(pname)
+              4.41. contact_param_decode_uri(pname)
+              4.42. contact_param_rm(pname)
+              4.43. contact_param_check(pname)
+              4.44. hdr_date_check(tdiff)
+              4.45. sip_parse_headers()
 
         5. Exported pseudo-variables
 
@@ -113,6 +119,7 @@ Gabriel Vasile
               5.3. $pcv(genaddr)
               5.4. $pcv(orig)
               5.5. $pcv(term)
+              5.6. $pcv(status)
 
    List of Examples
 
@@ -156,16 +163,20 @@ Gabriel Vasile
    1.38. set_uri_host usage
    1.39. is_request usage
    1.40. is_reply usage
-   1.41. is_gruu() usage
-   1.42. is_supported() usage
-   1.43. is_first_hop() usage
-   1.44. sip_p_charging_vector() usage
-   1.45. contact_param_encode usage
-   1.46. contact_param_decode usage
-   1.47. contact_param_decode_ruri usage
-   1.48. contact_param_rm usage
-   1.49. contact_param_check usage
-   1.50. hdr_date_check usage
+   1.41. is_sip usage
+   1.42. is_http usage
+   1.43. is_gruu() usage
+   1.44. is_supported() usage
+   1.45. is_first_hop() usage
+   1.46. sip_p_charging_vector() usage
+   1.47. contact_param_encode usage
+   1.48. contact_param_encode_alias usage
+   1.49. contact_param_decode usage
+   1.50. contact_param_decode_ruri usage
+   1.51. contact_param_rm usage
+   1.52. contact_param_check usage
+   1.53. hdr_date_check usage
+   1.54. sip_parse_headers usage
 
 Chapter 1. Admin Guide
 
@@ -222,16 +233,20 @@ Chapter 1. Admin Guide
         4.29. set_uri_host(uri, host)
         4.30. is_request()
         4.31. is_reply()
-        4.32. is_gruu([uri])
-        4.33. is_supported(option)
-        4.34. is_first_hop([mode])
-        4.35. sip_p_charging_vector(flags)
-        4.36. contact_param_encode(pname, saddr)
-        4.37. contact_param_decode(pname)
-        4.38. contact_param_decode_uri(pname)
-        4.39. contact_param_rm(pname)
-        4.40. contact_param_check(pname)
-        4.41. hdr_date_check(tdiff)
+        4.32. is_sip()
+        4.33. is_http()
+        4.34. is_gruu([uri])
+        4.35. is_supported(option)
+        4.36. is_first_hop([mode])
+        4.37. sip_p_charging_vector(flags)
+        4.38. contact_param_encode(pname, saddr)
+        4.39. contact_param_encode_alias(pname, saddr)
+        4.40. contact_param_decode(pname)
+        4.41. contact_param_decode_uri(pname)
+        4.42. contact_param_rm(pname)
+        4.43. contact_param_check(pname)
+        4.44. hdr_date_check(tdiff)
+        4.45. sip_parse_headers()
 
    5. Exported pseudo-variables
 
@@ -240,6 +255,7 @@ Chapter 1. Admin Guide
         5.3. $pcv(genaddr)
         5.4. $pcv(orig)
         5.5. $pcv(term)
+        5.6. $pcv(status)
 
 1. Overview
 
@@ -437,16 +453,20 @@ modparam("siputils", "e164_max_len", 20)
    4.29. set_uri_host(uri, host)
    4.30. is_request()
    4.31. is_reply()
-   4.32. is_gruu([uri])
-   4.33. is_supported(option)
-   4.34. is_first_hop([mode])
-   4.35. sip_p_charging_vector(flags)
-   4.36. contact_param_encode(pname, saddr)
-   4.37. contact_param_decode(pname)
-   4.38. contact_param_decode_uri(pname)
-   4.39. contact_param_rm(pname)
-   4.40. contact_param_check(pname)
-   4.41. hdr_date_check(tdiff)
+   4.32. is_sip()
+   4.33. is_http()
+   4.34. is_gruu([uri])
+   4.35. is_supported(option)
+   4.36. is_first_hop([mode])
+   4.37. sip_p_charging_vector(flags)
+   4.38. contact_param_encode(pname, saddr)
+   4.39. contact_param_encode_alias(pname, saddr)
+   4.40. contact_param_decode(pname)
+   4.41. contact_param_decode_uri(pname)
+   4.42. contact_param_rm(pname)
+   4.43. contact_param_check(pname)
+   4.44. hdr_date_check(tdiff)
+   4.45. sip_parse_headers()
 
 4.1.  options_reply()
 
@@ -987,7 +1007,33 @@ if (is_reply()) {
 }
 ...
 
-4.32.  is_gruu([uri])
+4.32.  is_sip()
+
+   Return true if it is a SIP message.
+
+   This function can be used from ANY_ROUTE.
+
+   Example 1.41. is_sip usage
+...
+if (is_sip()) {
+        ...
+}
+...
+
+4.33.  is_http()
+
+   Return true if it is a HTTP message.
+
+   This function can be used from ANY_ROUTE.
+
+   Example 1.42. is_http usage
+...
+if (is_http()) {
+        ...
+}
+...
+
+4.34.  is_gruu([uri])
 
    The function returns true if the uri is GRUU ('gr' parameter is
    present): 1 - pub-gruu; 2 - temp-gruu.
@@ -998,12 +1044,12 @@ if (is_reply()) {
 
    This function can be used from ANY_ROUTE.
 
-   Example 1.41. is_gruu() usage
+   Example 1.43. is_gruu() usage
 ...
 if(is_gruu()) { ... }
 ...
 
-4.33.  is_supported(option)
+4.35.  is_supported(option)
 
    Function returns true if given option is listed in Supported header(s)
    (if any) of the request. Currently the following options are known:
@@ -1011,12 +1057,12 @@ if(is_gruu()) { ... }
 
    This function can be used from ANY_ROUTE.
 
-   Example 1.42. is_supported() usage
+   Example 1.44. is_supported() usage
 ...
 if (is_supported("outbound")) { ... }
 ...
 
-4.34.  is_first_hop([mode])
+4.36.  is_first_hop([mode])
 
    The function returns true if the proxy is first hop after the original
    sender based on a best effort estimation by checking Via and
@@ -1041,26 +1087,38 @@ if (is_supported("outbound")) { ... }
 
    This function can be used from ANY_ROUTE.
 
-   Example 1.43. is_first_hop() usage
+   Example 1.45. is_first_hop() usage
 ...
 if(is_first_hop()) { ... }
 ...
 if(is_first_hop("1")) { ... }
 ...
 
-4.35.  sip_p_charging_vector(flags)
+4.37.  sip_p_charging_vector(flags)
 
    Manage the P-Charging-Vector header (RFC7315). The flags can be: 'r' -
-   remove; 'g' - generate; 'f' - force (remove + generate).
+   remove; 'g' - generate; 'f' - force (remove + generate). Once a new PCV
+   has been generated by 'g' or 'f' the PCV cannot be changed again. The
+   icid-generated-at parameter of a generated PCV will be set to the
+   sending interface.IP address.
+
+   Return Codes:
+     * 1 - Nothing was done.
+     * (2 - intentionally left out)
+     * 3 - P-Charging-Vector header has been newly generated.
+     * 4 - P-Charging-Vector header has been deleted.
+     * 5 - P-Charging-Vector header has been replaced or inserted after
+       deletion.
+     * negative - Any error occured during execution.
 
    This function can be used from ANY_ROUTE.
 
-   Example 1.44. sip_p_charging_vector() usage
+   Example 1.46. sip_p_charging_vector() usage
 ...
 sip_p_charging_vector("g");
 ...
 
-4.36.  contact_param_encode(pname, saddr)
+4.38.  contact_param_encode(pname, saddr)
 
    This function encodes URI inside Contact headers by building a new URI
    from 'saddr' parameter and adding a parameter with the name 'pname'
@@ -1073,14 +1131,28 @@ sip_p_charging_vector("g");
 
    This function can be used from REQUEST_ROUTE, ONREPLY_ROUTE.
 
-   Example 1.45. contact_param_encode usage
+   Example 1.47. contact_param_encode usage
 ...
 if (is_method("REGISTER") and src_ip == 10.0.0.0/8) {
     contact_param_encode("ksu", "sip:1.2.3.4:5060;transport=tcp");
 }
 ...
 
-4.37.  contact_param_decode(pname)
+4.39.  contact_param_encode_alias(pname, saddr)
+
+   Similar to contact_param_encode() but it also adds the alias parameter
+   with the encoded source address to the original Contact URI.
+
+   This function can be used from REQUEST_ROUTE, ONREPLY_ROUTE.
+
+   Example 1.48. contact_param_encode_alias usage
+...
+if (is_method("SUBSCRIBE") and src_ip == 10.0.0.0/8) {
+    contact_param_encode_alias("ksu", "sip:1.2.3.4:5060;transport=tcp");
+}
+...
+
+4.40.  contact_param_decode(pname)
 
    This function decodes URI inside Contact headers by building a new URI
    from 'pname' parameter, decoding its value from Base64URL.
@@ -1091,14 +1163,14 @@ if (is_method("REGISTER") and src_ip == 10.0.0.0/8) {
 
    This function can be used from REQUEST_ROUTE, ONREPLY_ROUTE.
 
-   Example 1.46. contact_param_decode usage
+   Example 1.49. contact_param_decode usage
 ...
 if (is_method("REGISTER") and src_ip == 1.2.3.4) {
     contact_param_decode("ksu");
 }
 ...
 
-4.38.  contact_param_decode_uri(pname)
+4.41.  contact_param_decode_uri(pname)
 
    This function decodes R-URI (request URI) by building a new R-URI from
    'pname' parameter, decoding its value from Base64URL.
@@ -1109,14 +1181,14 @@ if (is_method("REGISTER") and src_ip == 1.2.3.4) {
 
    This function can be used from REQUEST_ROUTE.
 
-   Example 1.47. contact_param_decode_ruri usage
+   Example 1.50. contact_param_decode_ruri usage
 ...
 if (is_method("INVITE") and src_ip == 1.2.3.4) {
     contact_param_decode_ruri("ksu");
 }
 ...
 
-4.39.  contact_param_rm(pname)
+4.42.  contact_param_rm(pname)
 
    This function removes the parameter from the URIs inside the Contact
    headers.
@@ -1126,14 +1198,14 @@ if (is_method("INVITE") and src_ip == 1.2.3.4) {
 
    This function can be used from REQUEST_ROUTE, ONREPLY_ROUTE.
 
-   Example 1.48. contact_param_rm usage
+   Example 1.51. contact_param_rm usage
 ...
 if (is_method("REGISTER") and src_ip == 1.2.3.4) {
     contact_param_rm("myparam");
 }
 ...
 
-4.40.  contact_param_check(pname)
+4.43.  contact_param_check(pname)
 
    This function returns true (1) if the URI inside the Contact header
    contains the parameter with the name 'pname'. Otherwise it returns
@@ -1144,13 +1216,13 @@ if (is_method("REGISTER") and src_ip == 1.2.3.4) {
 
    This function can be used from ANY_ROUTE.
 
-   Example 1.49. contact_param_check usage
+   Example 1.52. contact_param_check usage
 ...
 if (contact_param_check("myparam")) {
 }
 ...
 
-4.41.  hdr_date_check(tdiff)
+4.44.  hdr_date_check(tdiff)
 
    Returns true if sip message has Date header and its value is lower than
    'NOW() - tdiff'.
@@ -1161,11 +1233,24 @@ if (contact_param_check("myparam")) {
 
    This function can be used from ANY_ROUTE.
 
-   Example 1.50. hdr_date_check usage
+   Example 1.53. hdr_date_check usage
 ...
 if (!hdr_date_check("10")) {
     sl_send_reply("403", "Outdated date");
     exit;
+}
+...
+
+4.45.  sip_parse_headers()
+
+   Return true if parsing (fast mode) all SIP headers is successful.
+
+   This function can be used from ANY_ROUTE.
+
+   Example 1.54. sip_parse_headers usage
+...
+if (sip_parse_headers()) {
+        ...
 }
 ...
 
@@ -1176,6 +1261,7 @@ if (!hdr_date_check("10")) {
    5.3. $pcv(genaddr)
    5.4. $pcv(orig)
    5.5. $pcv(term)
+   5.6. $pcv(status)
 
 5.1. $pcv(all)
 
@@ -1196,3 +1282,16 @@ if (!hdr_date_check("10")) {
 5.5. $pcv(term)
 
    term-ioi field (see RFC7315 section 5.6)
+
+5.6. $pcv(status)
+
+   Returns whether the PCV header was successfully parsed, deleted, newly
+   generated or other.
+     * 0 - No P-Charging-Vector header in message.
+     * 1 - P-Charging-Vector header in message and parsed successfully.
+     * 2 - P-Charging-Vector is present, but has no valid icid-value
+       parameter.
+     * 3 - P-Charging-Vector header has been newly generated or replaced.
+     * 4 - P-Charging-Vector header has been deleted.
+
+   Negative values indicate an internal error during the parsing process.

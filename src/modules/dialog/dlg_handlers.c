@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -57,7 +59,6 @@
 #include "dlg_dmq.h"
 
 static str rr_param;		   /*!< record-route parameter for matching */
-static int dlg_flag_mask = 0;  /*!< flag for dialog tracking */
 static pv_spec_t *timeout_avp; /*!< AVP for timeout setting */
 static int default_timeout;	   /*!< default dialog timeout */
 static int seq_match_mode;	   /*!< dlg_match mode */
@@ -102,20 +103,16 @@ int dlg_set_tm_waitack(tm_cell_t *t, dlg_cell_t *dlg);
 /*!
  * \brief Initialize the dialog handlers
  * \param rr_param_p added record-route parameter
- * \param dlg_flag_p dialog flag
  * \param timeout_avp_p AVP for timeout setting
  * \param default_timeout_p default timeout
  * \param seq_match_mode_p matching mode
+ * \param keep_proxy_rr_p keep proxy's record-route mode
  */
-void init_dlg_handlers(char *rr_param_p, int dlg_flag_p,
-		pv_spec_t *timeout_avp_p, int default_timeout_p, int seq_match_mode_p,
-		int keep_proxy_rr_p)
+void init_dlg_handlers(char *rr_param_p, pv_spec_t *timeout_avp_p,
+		int default_timeout_p, int seq_match_mode_p, int keep_proxy_rr_p)
 {
 	rr_param.s = rr_param_p;
 	rr_param.len = strlen(rr_param.s);
-
-	if(dlg_flag_p >= 0)
-		dlg_flag_mask = 1 << dlg_flag_p;
 
 	timeout_avp = timeout_avp_p;
 	default_timeout = default_timeout_p;
@@ -243,15 +240,16 @@ int populate_leg_info(struct dlg_cell *dlg, struct sip_msg *msg, struct cell *t,
 		skip_recs = 0;
 	} else {
 		/* was the 200 OK received or local generated */
-		own_rr = ((t->relayed_reply_branch >= 0) ? (
-						  (t->uac[t->relayed_reply_branch].flags
-								  & TM_UAC_FLAG_R2)
-								  ? 2
-								  : ((t->uac[t->relayed_reply_branch].flags
-											 & TM_UAC_FLAG_RR)
-												  ? 1
-												  : 0))
-												 : 0);
+		own_rr = ((t->relayed_reply_branch >= 0)
+						  ? ((t->uac[t->relayed_reply_branch].flags
+									 & TM_UAC_FLAG_R2)
+											? 2
+											: ((t->uac[t->relayed_reply_branch]
+															   .flags
+													   & TM_UAC_FLAG_RR)
+															  ? 1
+															  : 0))
+						  : 0);
 		skip_recs = dlg->from_rr_nb + ((keep_proxy_rr & 1) > 0 ? 0 : own_rr);
 	}
 
@@ -497,7 +495,7 @@ static void dlg_onreply(struct cell *t, int type, struct tmcb_params *param)
 	next_state_dlg(dlg, event, &old_state, &new_state, &unref);
 	if(new_state == DLG_STATE_DELETED && old_state != DLG_STATE_DELETED) {
 		/* set end time */
-		dlg->end_ts = (unsigned int)(time(0));
+		dlg->end_ts = ksr_time_uint(NULL, NULL);
 	}
 	if(dlg_run_event_route(
 			   dlg, (rpl == FAKED_REPLY) ? NULL : rpl, old_state, new_state)
@@ -543,7 +541,7 @@ static void dlg_onreply(struct cell *t, int type, struct tmcb_params *param)
 		}
 
 		/* set start time */
-		dlg->start_ts = (unsigned int)(time(0));
+		dlg->start_ts = ksr_time_uint(NULL, NULL);
 
 		/* save the settings to the database,
 		 * if realtime saving mode configured- save dialog now
@@ -804,18 +802,7 @@ void dlg_onreq(struct cell *t, int type, struct tmcb_params *param)
 			else if(spiral_detected == 0)
 				run_create_callbacks(dlg, req);
 		}
-	}
-	if(dlg == NULL) {
-		if((dlg_flag_mask == 0)
-				|| (req->flags & dlg_flag_mask) != dlg_flag_mask) {
-			LM_DBG("flag not set for creating a new dialog\n");
-			return;
-		}
-		LM_DBG("dialog creation on config flag\n");
-		dlg_new_dialog(req, t, 1);
-		dlg = dlg_get_ctx_dialog();
-	}
-	if(dlg != NULL) {
+
 		LM_DBG("dialog added to tm callbacks\n");
 		dlg_set_tm_callbacks(t, req, dlg, spiral_detected);
 		_dlg_ctx.t = 1;
@@ -1445,7 +1432,7 @@ void dlg_onroute(struct sip_msg *req, str *route_params, void *param)
 	next_state_dlg(dlg, event, &old_state, &new_state, &unref);
 
 	CURR_DLG_ID = req->id;
-	CURR_DLG_LIFETIME = (unsigned int)(time(0)) - dlg->start_ts;
+	CURR_DLG_LIFETIME = ksr_time_uint(NULL, NULL) - dlg->start_ts;
 	CURR_DLG_STATUS = new_state;
 
 	if(dlg_run_event_route(dlg, req, old_state, new_state) < 0) {
@@ -1457,7 +1444,7 @@ void dlg_onroute(struct sip_msg *req, str *route_params, void *param)
 	 * to absorb in-air messages */
 	if(new_state == DLG_STATE_DELETED && old_state != DLG_STATE_DELETED) {
 		/* set end time */
-		dlg->end_ts = (unsigned int)(time(0));
+		dlg->end_ts = ksr_time_uint(NULL, NULL);
 		iuid = dlg_get_iuid_shm_clone(dlg);
 		if(iuid != NULL) {
 			if(d_tmb.register_tmcb(req, NULL, TMCB_DESTROY, unref_dlg_from_cb,
@@ -1628,6 +1615,7 @@ void dlg_ontimeout(struct dlg_tl *tl)
 		}
 	}
 
+	unref = 0;
 	/* mark dialog as expired */
 	dlg->dflags |= DLG_FLAG_EXPIRED;
 
@@ -1695,24 +1683,25 @@ void dlg_ontimeout(struct dlg_tl *tl)
 				dlg->tag[DLG_CALLEE_LEG].s, old_state);
 
 		/* set end time */
-		dlg->end_ts = (unsigned int)(time(0));
+		dlg->end_ts = ksr_time_uint(NULL, NULL);
 
 		/* dialog timeout */
 		run_dlg_callbacks(
 				DLGCB_EXPIRED, dlg, NULL, NULL, DLG_DIR_NONE, timeout_cb);
 
-		dlg_unref(dlg, unref + 1);
-
+		unref++;
 		if_update_stat(dlg_enable_stats, expired_dlgs, 1);
 		if_update_stat(dlg_enable_stats, active_dlgs, -1);
 	} else {
-		dlg_unref(dlg, 1);
+		unref = 1;
 	}
 
 	if(dlg_enable_dmq && (dlg->iflags & DLG_IFLAG_DMQ_SYNC)
 			&& new_state > old_state) {
 		dlg_dmq_replicate_action(DLG_DMQ_STATE, dlg, 0, 0);
 	}
+
+	dlg_unref(dlg, unref);
 
 	return;
 }
@@ -1788,7 +1777,7 @@ int dlg_run_event_route(dlg_cell_t *dlg, sip_msg_t *msg, int ostate, int nstate)
 	int rt;
 	int bkroute;
 	sr_kemi_eng_t *keng = NULL;
-	str evname = str_init("unknown");
+	str evname = str_init("");
 	int h_entry = 0;
 	int h_id = 0;
 	dlg_cell_t *dlg0 = NULL;
@@ -1836,7 +1825,7 @@ int dlg_run_event_route(dlg_cell_t *dlg, sip_msg_t *msg, int ostate, int nstate)
 		}
 	}
 
-	if(rt >= 0 || dlg_event_callback.len > 0) {
+	if(rt >= 0 || (dlg_event_callback.len > 0 && evname.len > 0)) {
 		if(msg == NULL)
 			fmsg = faked_msg_next();
 		else
@@ -1892,6 +1881,140 @@ int dlg_run_event_route(dlg_cell_t *dlg, sip_msg_t *msg, int ostate, int nstate)
 	return 0;
 }
 
+/*!
+ *
+ */
+int dlg_set_state(sip_msg_t *msg, int istate)
+{
+	str sc = STR_NULL;
+	str sf = STR_NULL;
+	str st = STR_NULL;
+	dlg_cell_t *dlg = NULL;
+	unsigned int dir = 0;
+	int ostate = 0;
+
+	if(msg->callid == NULL
+			&& ((parse_headers(msg, HDR_CALLID_F, 0) == -1)
+					|| (msg->callid == NULL))) {
+		LM_ERR("cannot parse Call-Id header\n");
+		return -1;
+	}
+	if(parse_from_header(msg) < 0) {
+		LM_ERR("cannot parse From header\n");
+		return -1;
+	}
+	if(parse_to_header(msg) < 0) {
+		LM_ERR("cannot parse To header\n");
+		return -1;
+	}
+	if(msg->first_line.type != SIP_REQUEST
+			&& msg->first_line.type != SIP_REPLY) {
+		LM_ERR("unknown message type\n");
+		return -1;
+	}
+	sc = msg->callid->body;
+	sf = get_from(msg)->tag_value;
+	st = get_to(msg)->tag_value;
+
+	dlg = get_dlg(&sc, &sf, &st, &dir);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found\n");
+		return -1;
+	}
+	ostate = dlg->state;
+	dlg->state = istate;
+	/* updates for terminated dialogs */
+	if(ostate == DLG_STATE_CONFIRMED && istate == DLG_STATE_DELETED) {
+		/* updating timestamps, flags, dialog stats */
+		dlg->init_ts = ksr_time_uint(NULL, NULL);
+		dlg->end_ts = ksr_time_uint(NULL, NULL);
+	}
+	dlg->dflags |= DLG_FLAG_CHANGED;
+	dlg_release(dlg);
+
+	return 0;
+}
+
+/*!
+ *
+ */
+int dlg_update_state(sip_msg_t *msg)
+{
+	str sc = STR_NULL;
+	str sf = STR_NULL;
+	str st = STR_NULL;
+	dlg_cell_t *dlg = NULL;
+	unsigned int dir = 0;
+	int old_state = 0;
+	int new_state = 0;
+	int event = 0;
+	int unref = 0;
+
+	if(msg->callid == NULL
+			&& ((parse_headers(msg, HDR_CALLID_F, 0) == -1)
+					|| (msg->callid == NULL))) {
+		LM_ERR("cannot parse Call-Id header\n");
+		return -1;
+	}
+	if(parse_from_header(msg) < 0) {
+		LM_ERR("cannot parse From header\n");
+		return -1;
+	}
+	if(parse_to_header(msg) < 0) {
+		LM_ERR("cannot parse To header\n");
+		return -1;
+	}
+	if(msg->first_line.type != SIP_REQUEST
+			&& msg->first_line.type != SIP_REPLY) {
+		LM_ERR("unknown message type\n");
+		return -1;
+	}
+	sc = msg->callid->body;
+	sf = get_from(msg)->tag_value;
+	st = get_to(msg)->tag_value;
+
+	if(msg->first_line.type == SIP_REQUEST) {
+		switch(msg->first_line.u.request.method_value) {
+			case METHOD_PRACK:
+				event = DLG_EVENT_REQPRACK;
+				break;
+			case METHOD_ACK:
+				event = DLG_EVENT_REQACK;
+				break;
+			case METHOD_BYE:
+				event = DLG_EVENT_REQBYE;
+				break;
+			default:
+				event = DLG_EVENT_REQ;
+		}
+	} else {
+		if(msg->first_line.u.reply.statuscode < 200) {
+			event = DLG_EVENT_RPL1xx;
+		} else if(msg->first_line.u.reply.statuscode < 300) {
+			event = DLG_EVENT_RPL2xx;
+		} else {
+			event = DLG_EVENT_RPL3xx;
+		}
+	}
+
+	dlg = get_dlg(&sc, &sf, &st, &dir);
+	if(dlg == NULL) {
+		LM_DBG("dialog not found\n");
+		return -1;
+	}
+	next_state_dlg(dlg, event, &old_state, &new_state, &unref);
+	dlg->dflags |= DLG_FLAG_CHANGED;
+	if(unref > 0) {
+		dlg_unref(dlg, unref);
+	}
+	dlg_release(dlg);
+
+	return 0;
+}
+
+/*!
+ *
+ */
 int dlg_manage(sip_msg_t *msg)
 {
 	str tag;

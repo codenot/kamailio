@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -516,15 +518,16 @@ static void link_dlg_profile(
 		linker->next = dlg->profile_links;
 		dlg->profile_links = linker;
 		linker->hash_linker.dlg = dlg;
+		link_profile(linker, &dlg->callid);
 		dlg_unlock(d_table, d_entry);
 	} else {
 		linker->next = dlg->profile_links;
 		dlg->profile_links = linker;
 		linker->hash_linker.dlg = dlg;
+		link_profile(linker, &dlg->callid);
 	}
 
 	atomic_or_int((volatile int *)&dlg->dflags, DLG_FLAG_CHANGED_PROF);
-	link_profile(linker, &dlg->callid);
 }
 
 

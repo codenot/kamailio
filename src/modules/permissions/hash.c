@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -38,13 +40,14 @@
 
 
 /* tag AVP specs */
-static int tag_avp_type;
-static int_str tag_avp;
+static avp_flags_t tag_avp_type;
+static avp_name_t tag_avp;
 
 extern int perm_peer_tag_mode;
 
 
 extern int _perm_max_subnets;
+extern int _perm_subnet_match_mode;
 
 #define PERM_MAX_SUBNETS _perm_max_subnets
 
@@ -54,7 +57,7 @@ extern int _perm_max_subnets;
 int init_tag_avp(str *tag_avp_param)
 {
 	pv_spec_t avp_spec;
-	unsigned short avp_flags;
+	avp_flags_t avp_flags;
 
 	if(tag_avp_param->s && tag_avp_param->len > 0) {
 		if(pv_parse_spec(tag_avp_param, &avp_spec) == 0
@@ -697,6 +700,8 @@ int match_subnet_table(struct subnet *table, unsigned int grp, ip_addr_t *addr,
 {
 	unsigned int count, i;
 	avp_value_t val;
+	int best_idx = -1;
+	unsigned int best_mask = 0;
 
 	count = table[PERM_MAX_SUBNETS].grp;
 
@@ -711,16 +716,27 @@ int match_subnet_table(struct subnet *table, unsigned int grp, ip_addr_t *addr,
 		if(((table[i].port == port) || (table[i].port == 0))
 				&& (ip_addr_match_net(addr, &table[i].subnet, table[i].mask)
 						== 0)) {
-			if(tag_avp.n && table[i].tag.s) {
-				val.s = table[i].tag;
-				if(add_avp(tag_avp_type | AVP_VAL_STR, tag_avp, val) != 0) {
-					LM_ERR("setting of tag_avp failed\n");
-					return -1;
-				}
+			if(table[i].mask > best_mask) {
+				best_mask = table[i].mask;
+				best_idx = i;
 			}
-			return 1;
+			if(_perm_subnet_match_mode == 0) {
+				/* use the first match */
+				break;
+			}
 		}
 		i++;
+	}
+
+	if(best_idx >= 0) {
+		if(tag_avp.n && table[best_idx].tag.s) {
+			val.s = table[best_idx].tag;
+			if(add_avp(tag_avp_type | AVP_VAL_STR, tag_avp, val) != 0) {
+				LM_ERR("setting of tag_avp failed\n");
+				return -1;
+			}
+		}
+		return 1;
 	}
 
 	return -1;
@@ -737,6 +753,8 @@ int find_group_in_subnet_table(
 {
 	unsigned int count, i;
 	avp_value_t val;
+	int best_idx = -1;
+	unsigned int best_mask = 0;
 
 	count = table[PERM_MAX_SUBNETS].grp;
 
@@ -745,16 +763,27 @@ int find_group_in_subnet_table(
 		if(((table[i].port == port) || (table[i].port == 0))
 				&& (ip_addr_match_net(addr, &table[i].subnet, table[i].mask)
 						== 0)) {
-			if(tag_avp.n && table[i].tag.s) {
-				val.s = table[i].tag;
-				if(add_avp(tag_avp_type | AVP_VAL_STR, tag_avp, val) != 0) {
-					LM_ERR("setting of tag_avp failed\n");
-					return -1;
-				}
+			if(table[i].mask > best_mask) {
+				best_mask = table[i].mask;
+				best_idx = i;
 			}
-			return table[i].grp;
+			if(_perm_subnet_match_mode == 0) {
+				/* use the first match */
+				break;
+			}
 		}
 		i++;
+	}
+
+	if(best_idx >= 0) {
+		if(tag_avp.n && table[best_idx].tag.s) {
+			val.s = table[best_idx].tag;
+			if(add_avp(tag_avp_type | AVP_VAL_STR, tag_avp, val) != 0) {
+				LM_ERR("setting of tag_avp failed\n");
+				return -1;
+			}
+		}
+		return table[best_idx].grp;
 	}
 
 	return -1;

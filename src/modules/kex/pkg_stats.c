@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -279,9 +281,13 @@ static void rpc_pkg_info(rpc_t *rpc, void *ctx)
 /**
  *
  */
+/* clang-format off */
 rpc_export_t kex_pkg_rpc[] = {
-		{"pkg.stats", rpc_pkg_stats, rpc_pkg_stats_doc, RET_ARRAY},
-		{"pkg.info", rpc_pkg_info, rpc_pkg_info_doc, 0}, {0, 0, 0, 0}};
+	{"pkg.stats", rpc_pkg_stats, rpc_pkg_stats_doc, RET_ARRAY},
+	{"pkg.info", rpc_pkg_info, rpc_pkg_info_doc, 0},
+	{0, 0, 0, 0}
+};
+/* clang-format on */
 
 /**
  *

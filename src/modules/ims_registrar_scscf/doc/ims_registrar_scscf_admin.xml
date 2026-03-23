@@ -230,6 +230,25 @@
     </section>
 
     <section>
+      <title>ue_unsubscribe_on_dereg (int)</title>
+
+      <para>Many UEs do not unsubscribe on de-register, therefor if the
+      parameter is set to 0, the default, any subscription of that subscriber
+      will be removed and NOTIFY will be not sent. To disable this behaviour set this
+      parameter to 1.</para>
+
+      <para><emphasis> Default value is 0 (disabled)</emphasis></para>
+
+      <example>
+        <title>Set <varname>user_data_dtd</varname>parameter</title>
+
+        <programlisting format="linespecific">...
+        modparam("ims_registrar_scscf", "ue_unsubscribe_on_dereg", 1)
+...</programlisting>
+      </example>
+    </section>
+
+    <section>
       <title>user_data_dtd (string)</title>
 
       <para>DTD to check the user data received in SAA (Server Assignment
@@ -744,7 +763,7 @@ switch ($retcode) {
       profile)</function></title>
 
       <para>The function fetches the contacts for 'uri' from table 'domain' to
-      pseudo-variable $imssulc(profile) [imssulc = ims scscf ulc].</para>
+      pseudo-variable $ulc(profile) [ulc = ims scscf ulc].</para>
 
       <para>Meaning of the parameters is as follows:</para>
 
@@ -761,7 +780,7 @@ switch ($retcode) {
         </listitem>
 
         <listitem>
-          <para><emphasis>profile</emphasis> - Name of $imssulc
+          <para><emphasis>profile</emphasis> - Name of $ulc
           pseudo-variable profile that will store the fetched contacts. It is
           a static string.</para>
         </listitem>
@@ -793,7 +812,7 @@ reg_fetch_contacts("location", "sip:user@kamailio.org", "caller");
 
       <itemizedlist>
         <listitem>
-          <para><emphasis>profile</emphasis> - Name of $imssulc
+          <para><emphasis>profile</emphasis> - Name of $ulc
           pseudo-variable profile that stores the contacts. It is a static
           string.</para>
         </listitem>

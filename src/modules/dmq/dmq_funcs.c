@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -234,14 +236,20 @@ int dmq_send_message(dmq_peer_t *peer, str *body, dmq_node_t *node,
 		return -1;
 	}
 	/* add Max-Forwards and Content-Type headers */
-	str_hdr.len = 34 + content_type->len + (CRLF_LEN * 2);
+	str_hdr.len = 40 + content_type->len + (CRLF_LEN * 2);
 	str_hdr.s = pkg_malloc(str_hdr.len);
 	if(str_hdr.s == NULL) {
 		PKG_MEM_ERROR;
 		return -1;
 	}
-	len += sprintf(str_hdr.s, "Max-Forwards: %d" CRLF "Content-Type: %.*s" CRLF,
-			max_forwards, content_type->len, content_type->s);
+	len = snprintf(str_hdr.s, str_hdr.len,
+			"Max-Forwards: %d" CRLF "Content-Type: %.*s" CRLF, max_forwards,
+			content_type->len, content_type->s);
+	if(len < 0 || len >= str_hdr.len) {
+		LM_ERR("failed to create the headers\n");
+		pkg_free(str_hdr.s);
+		return -1;
+	}
 	str_hdr.len = len;
 
 	cb_param = shm_malloc(sizeof(*cb_param));
@@ -250,7 +258,11 @@ int dmq_send_message(dmq_peer_t *peer, str *body, dmq_node_t *node,
 		goto error;
 	}
 	memset(cb_param, 0, sizeof(*cb_param));
-	cb_param->resp_cback = *resp_cback;
+	if(resp_cback == NULL) {
+		cb_param->resp_cback = dmq_default_resp_callback;
+	} else {
+		cb_param->resp_cback = *resp_cback;
+	}
 	cb_param->node = shm_dup_node(node);
 	if(cb_param->node == NULL) {
 		LM_ERR("error building callback parameter\n");
@@ -563,4 +575,9 @@ void ping_servers(unsigned int ticks, void *param)
 	if(ret < 0) {
 		LM_ERR("error broadcasting message\n");
 	}
+}
+
+str get_dmq_server_socket()
+{
+	return dmq_server_socket;
 }

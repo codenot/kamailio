@@ -233,7 +233,13 @@ void set_sdp_payload_attr(sdp_payload_attr_t *payload_attr, str *rtp_enc,
 void set_sdp_payload_fmtp(sdp_payload_attr_t *payload_attr, str *fmtp_string)
 {
 	if(payload_attr == NULL) {
-		LM_ERR("Invalid payload location\n");
+		if(fmtp_string != NULL && fmtp_string->s != NULL
+				&& fmtp_string->len > 0) {
+			LM_ERR("Invalid payload location - fmtp: %.*s\n", fmtp_string->len,
+					fmtp_string->s);
+		} else {
+			LM_ERR("Invalid payload location\n");
+		}
 		return;
 	}
 	payload_attr->fmtp_string.s = fmtp_string->s;
@@ -353,6 +359,8 @@ sdp_payload_attr_t *get_sdp_payload4payload(
 			return payload;
 		}
 	}
+
+	LM_DBG("payload not found: %.*s\n", rtp_payload->len, rtp_payload->s);
 
 	return NULL;
 }
@@ -692,7 +700,7 @@ static int parse_sdp_session(
 									HOLD_PORT_ICE_TRICKLE_LEN)
 									== 0)
 						LM_DBG("Not a zeroed on-hold (RFC2543), because is ICE "
-							   "re-negotiaion (RFC8840)\n");
+							   "re-negotiation (RFC8840)\n");
 					else
 						stream->is_on_hold = RFC2543_HOLD;
 				}
@@ -711,7 +719,7 @@ static int parse_sdp_session(
 									HOLD_PORT_ICE_TRICKLE_LEN)
 									== 0)
 						LM_DBG("Not a zeroed on-hold (RFC2543), because is ICE "
-							   "re-negotiaion (RFC8840)\n");
+							   "re-negotiation (RFC8840)\n");
 					else
 						stream->is_on_hold = RFC2543_HOLD;
 				}
@@ -810,9 +818,11 @@ static int parse_mixed_content(str *mixed_body, str delimiter, sdp_info_t *_sdp)
 		} /* end of while */
 		/* and now we need to parse the content */
 		if(start_parsing) {
-			while(('\n' == *rest) || ('\r' == *rest) || ('\t' == *rest)
-					|| (' ' == *rest))
+			while((rest < bodylimit)
+					&& (('\n' == *rest) || ('\r' == *rest) || ('\t' == *rest)
+							|| (' ' == *rest))) {
 				rest++; /* Skip any whitespace */
+			}
 			_sdp->raw_sdp.s = rest;
 			_sdp->raw_sdp.len = d2p - rest;
 			/* LM_DBG("we need to check session %d: <%.*s>\n", session_num, _sdp.raw_sdp.len, _sdp.raw_sdp.s); */
@@ -1223,7 +1233,7 @@ sdp_ice_attr_t *clone_sdp_ice_attr(sdp_ice_attr_t *ice_attr)
 	}
 	memset(clone_ice_attr, 0, len);
 
-	p = (char *)(clone_ice_attr); /* beginning of the struct */
+	p = (char *)(clone_ice_attr + 1);
 
 	/* foundation */
 	if(ice_attr->foundation.len) {
@@ -1291,7 +1301,7 @@ sdp_ice_opt_t *clone_sdp_opt_attr(sdp_ice_opt_t *ice_opt)
 		return NULL;
 	}
 	memset(clone_ice_opt, 0, len);
-	p = (char *)(clone_ice_opt); /* beginning of the struct */
+	p = (char *)(clone_ice_opt + 1);
 
 	/* ice option */
 	if(ice_opt->option.len) {
@@ -1590,7 +1600,7 @@ error:
 
 sdp_info_t *clone_sdp_info(struct sip_msg *_m)
 {
-	sdp_info_t *clone_sdp_info, *sdp_info = (sdp_info_t *)_m->body;
+	sdp_info_t *cloned_sdp_info, *sdp_info = (sdp_info_t *)_m->body;
 	sdp_session_cell_t *clone_session, *prev_clone_session, *session;
 	int i, len;
 
@@ -1608,23 +1618,23 @@ sdp_info_t *clone_sdp_info(struct sip_msg *_m)
 	}
 
 	len = sizeof(sdp_info_t);
-	clone_sdp_info = (sdp_info_t *)shm_malloc(len);
-	if(clone_sdp_info == NULL) {
+	cloned_sdp_info = (sdp_info_t *)shm_malloc(len);
+	if(cloned_sdp_info == NULL) {
 		SHM_MEM_ERROR;
 		return NULL;
 	}
-	LM_DBG("clone_sdp_info: %p\n", clone_sdp_info);
-	memset(clone_sdp_info, 0, len);
+	LM_DBG("cloned_sdp_info: %p\n", cloned_sdp_info);
+	memset(cloned_sdp_info, 0, len);
 	LM_DBG("we have %d sessions\n", sdp_info->sessions_num);
-	clone_sdp_info->sessions_num = sdp_info->sessions_num;
-	clone_sdp_info->streams_num = sdp_info->streams_num;
+	cloned_sdp_info->sessions_num = sdp_info->sessions_num;
+	cloned_sdp_info->streams_num = sdp_info->streams_num;
 
 	session = sdp_info->sessions;
 	clone_session = clone_sdp_session_cell(session);
 	if(clone_session == NULL) {
 		goto error;
 	}
-	clone_sdp_info->sessions = clone_session;
+	cloned_sdp_info->sessions = clone_session;
 	prev_clone_session = clone_session;
 	session = session->next;
 	for(i = 1; i < sdp_info->sessions_num; i++) {
@@ -1637,9 +1647,9 @@ sdp_info_t *clone_sdp_info(struct sip_msg *_m)
 		session = session->next;
 	}
 
-	return clone_sdp_info;
+	return cloned_sdp_info;
 error:
-	free_cloned_sdp(clone_sdp_info);
+	free_cloned_sdp(cloned_sdp_info);
 	return NULL;
 }
 

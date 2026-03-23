@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -59,9 +61,10 @@ void db_redis_free_tables(km_redis_con_t *con);
 int db_redis_parse_schema(km_redis_con_t *con);
 int db_redis_parse_keys(km_redis_con_t *con);
 
-int db_redis_key_add_string(redis_key_t **list, const char *entry, int len);
+int db_redis_key_add_string(redis_key_t **list, const char *entry, size_t len);
 int db_redis_key_add_str(redis_key_t **list, const str *entry);
-int db_redis_key_prepend_string(redis_key_t **list, const char *entry, int len);
+int db_redis_key_prepend_string(
+		redis_key_t **list, const char *entry, size_t len);
 int db_redis_key_list2arr(redis_key_t *list, char ***arr);
 redis_key_t *db_redis_key_shift(redis_key_t **list);
 void db_redis_key_free(redis_key_t **list);

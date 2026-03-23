@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -41,7 +43,7 @@
 #define S_TO_TICKS(s) ((s)*TIMER_TICKS_HZ)
 
 
-/** @brief how many s pe per t ticks, integer value */
+/** @brief how many seconds per ticks, integer value */
 #define TICKS_TO_S(t) ((t) / TIMER_TICKS_HZ)
 
 /** @brief how many ms per t ticks, integer value */

@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -80,6 +82,21 @@ typedef struct prom_ctx
 extern str xhttp_prom_beginning;
 
 /**
+ * @brief string for metrics tags.
+ */
+extern str xhttp_prom_tags;
+
+/**
+ * @brief helper string for metrics tags. Used for appending tag lists
+ */
+extern char *xhttp_prom_tags_comma;
+
+/**
+ * @brief helper string for metrics tags. Used for appending to metric
+ */
+extern char *xhttp_prom_tags_braces;
+
+/**
  * @brief timeout in minutes to delete old metrics.
  */
 extern int timeout_minutes;
@@ -103,5 +120,21 @@ extern pkg_proc_stats_t *pkg_proc_stats;
  * @brief number of pkgmem statistics.
  */
 extern int pkg_proc_stats_no;
+
+/**
+ * @brief include metrics metadata in text output.
+ */
+extern int metadata_flags;
+
+/**
+ * @brief timestamp format: "ms" (milliseconds), "s" (seconds), or "sf" (seconds with fraction)
+ */
+extern str timestamp_format;
+
+enum
+{
+	METADATA_FLAGS_TYPE = (1 << 0),
+	METADATA_FLAGS_HELP = (1 << 1)
+};
 
 #endif /* _XHTTP_PROM_H */

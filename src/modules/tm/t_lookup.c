@@ -21,6 +21,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -148,6 +150,18 @@ void init_t()
 int get_t_branch()
 {
 	return T_branch;
+}
+
+void tm_get_tb(struct cell **t, int *branch)
+{
+	*t = T;
+	*branch = T_branch;
+}
+
+void tm_set_tb(struct cell *t, int branch)
+{
+	T = t;
+	T_branch = branch;
 }
 
 /**
@@ -628,7 +642,7 @@ int t_request_search(struct sip_msg *p_msg, struct cell **r_cell)
 			/* request matched ! */
 			LM_DBG("non-ACK matched\n");
 			goto found;
-		}	 /* synonym loop */
+		} /* synonym loop */
 	} else { /* it's an ACK request*/
 		/* all the transactions from the entry are compared */
 		clist_foreach(hash_bucket, p_cell, next_c)
@@ -716,7 +730,7 @@ int t_request_search(struct sip_msg *p_msg, struct cell **r_cell)
 			LM_DBG("non-2xx ACK matched\n");
 			goto found;
 		} /* synonym loop */
-	}	  /* ACK */
+	} /* ACK */
 
 notfound:
 
@@ -876,7 +890,7 @@ int t_lookup_request(struct sip_msg *p_msg, int leave_new_locked, int *cancel)
 			/* request matched ! */
 			LM_DBG("non-ACK matched\n");
 			goto found;
-		}	 /* synonym loop */
+		} /* synonym loop */
 	} else { /* it's an ACK request*/
 		/* all the transactions from the entry are compared */
 		clist_foreach(hash_bucket, p_cell, next_c)
@@ -964,7 +978,7 @@ int t_lookup_request(struct sip_msg *p_msg, int leave_new_locked, int *cancel)
 			LM_DBG("non-2xx ACK matched\n");
 			goto found;
 		} /* synonym loop */
-	}	  /* ACK */
+	} /* ACK */
 
 notfound:
 
@@ -1817,6 +1831,21 @@ static inline int new_t(struct sip_msg *p_msg)
 {
 	struct cell *new_cell;
 
+	if((ksr_msg_apply_changes_mode == 1)
+			|| (p_msg->msg_flags & FL_MSG_APPLY_CHANGES)) {
+		if(sip_msg_apply_changes(p_msg) < 0) {
+			return E_BAD_REQ;
+		}
+		if(parse_headers(p_msg, HDR_EOH_F, 0)) {
+			LM_ERR("parse_headers failed\n");
+			return E_BAD_REQ;
+		}
+		if((p_msg->parsed_flag & HDR_EOH_F) != HDR_EOH_F) {
+			LM_ERR("EoH not parsed\n");
+			return E_UNEXPECTED_STATE;
+		}
+	}
+
 	/* for ACK-dlw-wise matching, we want From-tags */
 	if(p_msg->REQ_METHOD == METHOD_INVITE && parse_from_header(p_msg) < 0) {
 		LM_ERR("no valid From in INVITE\n");
@@ -2129,10 +2158,11 @@ int t_lookup_ident_filter(struct cell **trans, unsigned int hash_index,
 
 	LOCK_HASH(hash_index);
 
-#ifndef E2E_CANCEL_HOP_BY_HOP
-#warning "t_lookup_ident() can only reliably match INVITE transactions in " \
-	"E2E_CANCEL_HOP_BY_HOP mode"
-#endif
+	/* ! E2E_CANCEL_HOP_BY_HOP */
+	if(!tm_e2e_cancel_hop_by_hop) {
+		LM_WARN("can only reliably match INVITE transactions in "
+				"E2E_CANCEL_HOP_BY_HOP mode\n");
+	}
 	hash_bucket = &(get_tm_table()->entries[hash_index]);
 	/* all the transactions from the entry are compared */
 	clist_foreach(hash_bucket, p_cell, next_c)

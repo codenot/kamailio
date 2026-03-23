@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -143,6 +145,11 @@ int ki_dmq_process_message_rc(sip_msg_t *msg, int returnval)
 	peer_reponse_t peer_response;
 	dmq_node_t *dmq_node = NULL;
 	int ret;
+
+	if(parse_headers(msg, HDR_EOH_F, 0) < 0) {
+		LM_ERR("failed to parse sip message headers\n");
+		goto error;
+	}
 
 	if((parse_sip_msg_uri(msg) < 0) || (!msg->parsed_uri.user.s)) {
 		LM_ERR("error parsing msg uri\n");

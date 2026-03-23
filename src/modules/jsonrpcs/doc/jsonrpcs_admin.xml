@@ -495,6 +495,7 @@ event_route[xhttp:request] {
 ...
 jsonrpc_exec('{"jsonrpc": "2.0", "method": "dispatcher.reload", "id": 1}');
 xlog("jsonrpc response code: $jsonrpl(code) - the body is: $jsonrpl(body)\n");
+jsonrpc_exec('{"jsonrpc": "2.0", "method": "corex.debug", "params": [ 2 ], "id": 1}');
 ...
 </programlisting>
 	    </example>
@@ -506,7 +507,7 @@ xlog("jsonrpc response code: $jsonrpl(code) - the body is: $jsonrpl(body)\n");
 	<title>JSONRPC Commands</title>
 	<para>
 	Here are some examples of RPC commands with the equivalent of running them
-	with &kamcmd; and the corresponding JSON document for them. It is important
+	with &kamctl; and the corresponding JSON document for them. It is important
 	to be aware that the name of the parameters doesn't matter, only the order
 	of the values must be the one expected by &kamailio; RPC command.
 	</para>
@@ -514,7 +515,7 @@ xlog("jsonrpc response code: $jsonrpl(code) - the body is: $jsonrpl(body)\n");
 	<title>JSONRPC Commands - Examples</title>
 	<programlisting format="linespecific">
 ...
-# kamcmd core.psx
+# kamctl rpc core.psx
 
 {
  "jsonrpc": "2.0",
@@ -522,8 +523,8 @@ xlog("jsonrpc response code: $jsonrpl(code) - the body is: $jsonrpl(body)\n");
   "id": 1
 }
 ...
-## - prototype: kamcmd dispatcher.set_state _state_ _group_ _address_
-# kamcmd dispatcher.set_state ip 2 sip:127.0.0.1:5080
+## - prototype: kamctl rpc dispatcher.set_state _state_ _group_ _address_
+# kamctl rpc dispatcher.set_state ip 2 sip:127.0.0.1:5080
 
 {
   "jsonrpc": "2.0",
@@ -539,7 +540,7 @@ xlog("jsonrpc response code: $jsonrpl(code) - the body is: $jsonrpl(body)\n");
   "method": "dispatcher.set_state",
   "params": {
     "state": "ip",
-    "grpup": 2,
+    "group": 2,
     "address": "sip:127.0.0.1:5080"
   },
   "id": 1
@@ -555,8 +556,14 @@ xlog("jsonrpc response code: $jsonrpl(code) - the body is: $jsonrpl(body)\n");
 	<para>
 	JSONRPC specifications do not enforce a specific transport to carry the
 	JSON documents. Very common is JSONRPC over HTTP or HTTPS, and they are
-	supported by &kamailio;. In addition, &kamailio; supports receiving JSON
-	documents via a local FIFO file.
+	supported by &kamailio;. In addition, &kamailio; JSONRPC over a local FIFO
+	file and over UDP/datagram using unix socket files or IPv4/IPv6 sockets.
+	</para>
+	<para>
+	An extenssion to the JSONRPC protocol is available: when "store_path" field
+	is provided in the command, instead of returning it, the result is stored in
+	a file on server at the path provided as the value of the field. It can
+	be useful for troubleshooting or when the result is very large.
 	</para>
  	<section>
 	    <title>JSONRPC Over HTTP</title>

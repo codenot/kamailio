@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -102,6 +104,7 @@ int ul_ka_urecord(urecord_t *ur)
 	str sproto = STR_NULL;
 	sip_uri_t duri;
 	char dproto;
+	int vproto;
 	struct hostent *he;
 	socket_info_t *ssock;
 	dest_info_t idst;
@@ -148,14 +151,16 @@ int ul_ka_urecord(urecord_t *ur)
 			}
 		}
 
-		if(ul_keepalive_timeout > 0 && uc->last_keepalive > 0) {
+		if(ul_keepalive_timeout > 0 && uc->last_keepalive > 0
+				&& (uc->flags & FL_KASENT)) {
 			if(uc->last_keepalive + ul_keepalive_timeout < tnow) {
 				/* set contact as expired in 10s */
 				LM_DBG("set expired contact on keepalive (%u + %u < %u)"
 					   " - aor: %.*s c: %.*s\n",
-						(unsigned int)uc->last_keepalive,
-						(unsigned int)ul_keepalive_timeout, (unsigned int)tnow,
-						ur->aor.len, ur->aor.s, uc->c.len, uc->c.s);
+						ksr_time_uint(&uc->last_keepalive, NULL),
+						(unsigned int)ul_keepalive_timeout,
+						ksr_time_sint(&tnow, NULL), ur->aor.len, ur->aor.s,
+						uc->c.len, uc->c.s);
 				if(uc->expires > tnow + 10) {
 					uc->expires = tnow + 10;
 					continue;
@@ -220,18 +225,20 @@ int ul_ka_urecord(urecord_t *ur)
 				via_ipv6 = 1;
 			}
 			vaddr = ssock->useinfo.name;
+			vproto = ssock->useinfo.proto;
 		} else {
 			if(ssock->address.af == AF_INET6) {
 				via_ipv6 = 1;
 			}
 			vaddr = ssock->address_str;
+			vproto = ssock->proto;
 		}
 		if(ssock->useinfo.port_no > 0) {
 			vport = ssock->useinfo.port_no_str;
 		} else {
 			vport = ssock->port_no_str;
 		}
-		get_valid_proto_string(dproto, 1, 1, &sproto);
+		get_valid_proto_string(vproto, 1, 1, &sproto);
 
 		bcnt++;
 		gettimeofday(&tv, NULL);
@@ -257,7 +264,9 @@ int ul_ka_urecord(urecord_t *ur)
 					kabuf_len, kabuf);
 			kamsg.s = kabuf;
 			kamsg.len = kabuf_len;
-			ul_ka_send(&kamsg, &idst);
+			if(ul_ka_send(&kamsg, &idst) >= 0) {
+				uc->flags |= FL_KASENT;
+			}
 		}
 	}
 	return 0;

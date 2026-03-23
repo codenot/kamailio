@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -58,6 +60,9 @@ int sruid_nextx_safe(sruid_t *sid, str *x);
 
 int sruid_nexthid(sruid_t *sid, str *sval);
 int sruid_nexthid_safe(sruid_t *sid, str *sval);
+
+int sruid_nextunid(sruid_t *sid, unsigned int nid);
+int sruid_nextunid_safe(sruid_t *sid, unsigned int nid);
 
 typedef int (*sruid_uuid_generate_f)(char *out, int *len);
 

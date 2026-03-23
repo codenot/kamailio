@@ -4,6 +4,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -74,6 +76,8 @@ int pv_get_xto_attr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res,
 		struct to_body *xto, int type);
 
 int pv_get_to_attr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
+
+int pv_get_totagstate(sip_msg_t *msg, pv_param_t *param, pv_value_t *res);
 
 int pv_get_from_attr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
 
@@ -186,6 +190,8 @@ int pv_get_content_length(
 int pv_get_msg_body(struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
 
 int pv_get_body_size(struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
+
+int pv_get_escstr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
 
 int pv_get_authattr(struct sip_msg *msg, pv_param_t *param, pv_value_t *res);
 

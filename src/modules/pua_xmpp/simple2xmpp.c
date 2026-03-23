@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -448,7 +450,6 @@ done:
 
 	xmlBufferFree(buffer);
 	xmlCleanupParser();
-	xmlMemoryDump();
 
 	if(sip_doc)
 		xmlFreeDoc(sip_doc);
@@ -464,7 +465,6 @@ error:
 	if(buffer)
 		xmlBufferFree(buffer);
 	xmlCleanupParser();
-	xmlMemoryDump();
 
 	return -1;
 }
@@ -573,7 +573,6 @@ int winfo2xmpp(str *to_uri, str *body, str *id)
 
 	xmlFreeDoc(notify_doc);
 	xmlCleanupParser();
-	xmlMemoryDump();
 	return 0;
 
 error:
@@ -587,7 +586,6 @@ error:
 	if(buffer)
 		xmlBufferFree(buffer);
 	xmlCleanupParser();
-	xmlMemoryDump();
 
 	return -1;
 }

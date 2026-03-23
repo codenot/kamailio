@@ -6,6 +6,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -68,7 +70,7 @@ int db_unixodbc_raw_query(const db1_con_t *_h, const str *_s, db1_res_t **_r);
 /*! \brief
  *  * Raw SQL query via async framework
  *   */
-int db_unixodbc_raw_query_async(const db1_con_t *_h, const str *_s);
+int db_unixodbc_raw_query_async(const str *_u, const str *_s);
 
 /*
  * Insert a row into table

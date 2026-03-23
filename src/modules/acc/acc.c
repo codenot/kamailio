@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -376,6 +378,9 @@ static void acc_db_init_keys(void)
  * returns 0 on success, -1 on error */
 int acc_db_init(const str *db_url)
 {
+	int tbl_ver;
+	db1_con_t *tmp_dbh = 0;
+
 	if(db_bind_mod(db_url, &acc_dbf) < 0) {
 		LM_ERR("bind_db failed\n");
 		return -1;
@@ -388,6 +393,44 @@ int acc_db_init(const str *db_url)
 	}
 
 	acc_db_init_keys();
+
+	if(db_ver_check == 1) {
+		tmp_dbh = acc_dbf.init(db_url);
+		if(tmp_dbh == 0) {
+			LM_ERR("version check failed. unable to connect to the database\n");
+			return -1;
+		}
+
+		/* requires updated precision in the newer DB schema */
+		if(acc_cdrs_table.len > 0 && cdr_duration_mode == 2) {
+			LM_DBG("checking valid schema version for cdr_duration_mode %d\n",
+					cdr_duration_mode);
+
+			tbl_ver = db_table_version(&acc_dbf, tmp_dbh, &acc_cdrs_table);
+			if(tbl_ver < 0) {
+				LM_ERR("failed querying version for table %.*s\n",
+						acc_cdrs_table.len, acc_cdrs_table.s);
+				if(acc_dbf.close) {
+					acc_dbf.close(tmp_dbh);
+				}
+				return -1;
+			}
+			if(tbl_ver < 3) {
+				LM_ERR("invalid version %d for table %.*s found, expected >= 3"
+					   " (check table structure and table \"version\")\n",
+						tbl_ver, acc_cdrs_table.len, acc_cdrs_table.s);
+				if(acc_dbf.close) {
+					acc_dbf.close(tmp_dbh);
+				}
+				return -1;
+			}
+		}
+
+		if(acc_dbf.close) {
+			acc_dbf.close(tmp_dbh);
+		}
+	}
+
 
 	return 0;
 }

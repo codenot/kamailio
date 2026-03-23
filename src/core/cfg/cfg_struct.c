@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -294,7 +296,7 @@ static void cfg_destory_groups(unsigned char *block)
 		mapping = group->mapping;
 		def = mapping ? mapping->def : NULL;
 
-		/* destory the shmized strings in the block */
+		/* destroy the shmized strings in the block */
 		if(block && def)
 			for(i = 0; i < group->num; i++)
 				if(((CFG_VAR_TYPE(&mapping[i]) == CFG_VAR_STRING)
@@ -376,7 +378,7 @@ int sr_cfg_init(void)
 	*cfg_child_cb_last = NULL;
 
 	/* A new cfg_child_cb struct must be created with a NULL callback function.
-	 * This stucture will be the entry point for the child processes, and
+	 * This structure will be the entry point for the child processes, and
 	 * will be freed later, when none of the processes refers to it */
 	*cfg_child_cb_first = *cfg_child_cb_last =
 			cfg_child_cb_new(NULL, NULL, NULL, 0);
@@ -534,7 +536,7 @@ void cfg_child_destroy(void)
 		cfg_child_cb = cfg_child_cb->next;
 		atomic_inc(&cfg_child_cb->refcnt);
 		if(atomic_dec_and_test(&prev_cb->refcnt)) {
-			/* No more pocess refers to this callback.
+			/* No more process refers to this callback.
 			 * Did this process block the deletion,
 			 * or is there any other process that has not
 			 * reached	prev_cb yet? */

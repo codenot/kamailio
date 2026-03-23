@@ -3,6 +3,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -844,7 +846,9 @@ int reg_replace(char *pattern, char *replacement, char *string, str *result)
 /* Converts a hex character to its integer value */
 char hex_to_char(char hex_code)
 {
-	return isdigit(hex_code) ? hex_code - '0' : tolower(hex_code) - 'a' + 10;
+	return isdigit((unsigned char)hex_code)
+				   ? hex_code - '0'
+				   : tolower((unsigned char)hex_code) - 'a' + 10;
 }
 
 /* Converts an integer value to its hex character */
@@ -869,7 +873,8 @@ int urlencode(str *sin, str *sout)
 	p = sin->s;
 
 	while(p < sin->s + sin->len) {
-		if(isalnum(*p) || *p == '-' || *p == '_' || *p == '.' || *p == '~')
+		if(isalnum((unsigned char)(*p)) || *p == '-' || *p == '_' || *p == '.'
+				|| *p == '~')
 			*at++ = *p;
 		else
 			*at++ = '%', *at++ = char_to_hex((unsigned char)(*p) >> 4),

@@ -5,6 +5,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -123,7 +125,7 @@ int process_stun_msg(char *buf, unsigned len, struct receive_info *ri)
 #endif
 
 	/* send STUN response */
-	if(msg_send(&dst, msg_res.msg.buf.s, msg_res.msg.buf.len) != 0) {
+	if(msg_send_buffer(&dst, msg_res.msg.buf.s, msg_res.msg.buf.len, 1) != 0) {
 		goto error;
 	}
 
@@ -512,6 +514,10 @@ static int stun_create_response(struct stun_msg *req, struct stun_msg *res,
 		}
 	}
 
+	if(res->msg.buf.len < sizeof(struct stun_hdr)) {
+		LM_ERR("invalid message\n");
+		return FATAL_ERROR;
+	}
 	res->hdr.len = htons(res->msg.buf.len - sizeof(struct stun_hdr));
 	memcpy(&res->msg.buf.s[sizeof(USHORT_T)], (void *)&res->hdr.len,
 			sizeof(USHORT_T));

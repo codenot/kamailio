@@ -7,6 +7,8 @@
  *
  * This file is part of Kamailio, a free SIP server.
  *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * Kamailio is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -518,7 +520,7 @@ int pvh_clone_branch_xavi(struct sip_msg *msg, str *xname)
 		if(sub->val.type == SR_XTYPE_DATA)
 			continue;
 		if(pvh_xavi_append_value(&sub->name, &sub->val, &br_xavi->val.v.xavp)
-				< 0) {
+				== NULL) {
 			LM_ERR("cannot clone xavi %.*s\n", sub->name.len, sub->name.s);
 			return -1;
 		}
